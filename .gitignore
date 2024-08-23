@@ -17,5 +17,5 @@ __pycache__
 *.onnx
 *.pgn
 lichess_db_puzzle.csv
-lichess_db_puzzle_csv.zst
+lichess_db_puzzle.csv.zst
 *.pkl
