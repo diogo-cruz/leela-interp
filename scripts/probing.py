@@ -1,6 +1,7 @@
 import argparse
 import pickle
 from pathlib import Path
+import re
 from typing import Literal
 
 import numpy as np
@@ -60,7 +61,9 @@ def collect_data(
     activation_name: str,
     prediction_target: Literal["target", "source"],
     n_train: int,
+    goal_square=3,
     train=True,
+    j=0,
 ):
     ys = []
     z_squares = []
@@ -77,12 +80,26 @@ def collect_data(
         assert board.fen() == LeelaBoard.from_puzzle(puzzle).fen()
         if prediction_target == "target":
             # Predict the third move target from the first move target:
-            y = puzzle.principal_variation[2][2:4]
-            z = puzzle.principal_variation[0][2:4]
+            if j == -1:
+                y = puzzle.principal_variation[goal_square-1][2:4]
+                z = puzzle.principal_variation[0][2:4]
+            elif j == 0:
+                y = puzzle.branch_1[goal_square-1][2:4]
+                z = puzzle.branch_1[0][2:4]
+            elif j == 1:
+                y = puzzle.branch_2[goal_square-1][2:4]
+                z = puzzle.branch_2[0][2:4]
         elif prediction_target == "source":
             # Predict the third move source from the third move target:
-            y = puzzle.principal_variation[2][:2]
-            z = puzzle.principal_variation[2][2:4]
+            if j == -1:
+                y = puzzle.principal_variation[goal_square-1][:2]
+                z = puzzle.principal_variation[goal_square-1][2:4]
+            elif j == 0:
+                y = puzzle.branch_1[goal_square-1][:2]
+                z = puzzle.branch_1[goal_square-1][2:4]
+            elif j == 1:
+                y = puzzle.branch_2[goal_square-1][:2]
+                z = puzzle.branch_2[goal_square-1][2:4]
         ys.append(board.sq2idx(y))
         z_squares.append(board.sq2idx(z))
 
@@ -98,12 +115,12 @@ def collect_data(
     return X, ys, z_squares
 
 
-def eval_probe(target_probe, source_probe, puzzles, activations, name, n_train):
+def eval_probe(target_probe, source_probe, puzzles, activations, name, n_train, goal_square, j):
     X, target_y, z_squares = collect_data(
-        puzzles, activations, name, "target", n_train=n_train, train=False
+        puzzles, activations, name, "target", n_train=n_train, train=False, goal_square=goal_square, j=j
     )
     _, source_y, _ = collect_data(
-        puzzles, activations, name, "source", n_train=n_train, train=False
+        puzzles, activations, name, "source", n_train=n_train, train=False, goal_square=goal_square, j=j
     )
 
     # Predict target squares:
@@ -123,13 +140,13 @@ def eval_probe(target_probe, source_probe, puzzles, activations, name, n_train):
     return source_accuracy, target_accuracy, accuracy
 
 
-def train_probes(activations, puzzles, n_train, hparams):
+def train_probes(activations, puzzles, n_train, hparams, goal_square, j):
     target_probes = []
     for layer in range(15):
         print(f"Layer {layer}")
         name = f"encoder{layer}/ln2"
         X, y, z_squares = collect_data(
-            puzzles, activations, name, "target", n_train=n_train
+            puzzles, activations, name, "target", n_train=n_train, goal_square=goal_square, j=j
         )
         probe = train_probe(X, y, z_squares, **hparams)
         target_probes.append(probe)
@@ -139,7 +156,7 @@ def train_probes(activations, puzzles, n_train, hparams):
         print(f"Layer {layer}")
         name = f"encoder{layer}/ln2"
         X, y, z_squares = collect_data(
-            puzzles, activations, name, "source", n_train=n_train
+            puzzles, activations, name, "source", n_train=n_train, goal_square=goal_square, j=j
         )
         probe = train_probe(X, y, z_squares, **hparams)
         source_probes.append(probe)
@@ -147,7 +164,7 @@ def train_probes(activations, puzzles, n_train, hparams):
     return target_probes, source_probes
 
 
-def eval_probes(target_probes, source_probes, puzzles, activations, n_train, path):
+def eval_probes(target_probes, source_probes, puzzles, activations, n_train, path, goal_square, j):
     accuracies = []
     source_accuracies = []
     target_accuracies = []
@@ -157,7 +174,7 @@ def eval_probes(target_probes, source_probes, puzzles, activations, n_train, pat
     ):
         name = f"encoder{layer}/ln2"
         source_accuracy, target_accuracy, accuracy = eval_probe(
-            target_probe, source_probe, puzzles, activations, name, n_train
+            target_probe, source_probe, puzzles, activations, name, n_train, goal_square, j
         )
         accuracies.append(accuracy)
         source_accuracies.append(source_accuracy)
@@ -183,7 +200,10 @@ def main(args):
     base_dir = Path(args.base_dir)
 
     try:
-        with open(base_dir / "interesting_puzzles_without_corruptions.pkl", "rb") as f:
+        #match = re.search(r'\d+$', args.filename)
+        #case_number = match.group()
+        case_number = args.filename.split("_")[-1]
+        with open(base_dir / f"{args.filename}.pkl", "rb") as f:
             puzzles = pickle.load(f)
     except FileNotFoundError:
         raise ValueError("Puzzles not found, run make_puzzles.py first")
@@ -216,6 +236,8 @@ def main(args):
         "device": args.device,
     }
 
+    j_list = range(2) if args.double_game else [-1]
+
     if args.main:
         model = Lc0Model(base_dir / "lc0.onnx", device=args.device)
 
@@ -232,29 +254,33 @@ def main(args):
             overwrite=True,
         )
 
-        for seed in range(args.n_seeds):
-            torch.manual_seed(seed)
+        for j in j_list:
+            for goal_square in range(3 if j == -1 else 1, args.max_goal_square + 1, 2):
+                for seed in range(args.n_seeds):
+                    torch.manual_seed(seed)
 
-            target_probes, source_probes = train_probes(
-                activations, puzzles, n_train, hparams
-            )
+                    target_probes, source_probes = train_probes(
+                        activations, puzzles, n_train, hparams, goal_square, j
+                    )
 
-            save_dir = base_dir / f"results/probing/{args.split}/{seed}"
-            save_dir.mkdir(parents=True, exist_ok=True)
+                    save_dir = base_dir / f"results/probing_{case_number}/{args.split}/{seed}/{goal_square+(j if j != -1 else 0)}"
+                    save_dir.mkdir(parents=True, exist_ok=True)
 
-            with open(save_dir / "target_probes.pkl", "wb") as f:
-                pickle.dump(target_probes, f)
-            with open(save_dir / "source_probes.pkl", "wb") as f:
-                pickle.dump(source_probes, f)
+                    with open(save_dir / "target_probes.pkl", "wb") as f:
+                        pickle.dump(target_probes, f)
+                    with open(save_dir / "source_probes.pkl", "wb") as f:
+                        pickle.dump(source_probes, f)
 
-            eval_probes(
-                target_probes,
-                source_probes,
-                puzzles,
-                activations,
-                n_train,
-                save_dir / "main.pkl",
-            )
+                    eval_probes(
+                        target_probes,
+                        source_probes,
+                        puzzles,
+                        activations,
+                        n_train,
+                        save_dir / "main.pkl",
+                        goal_square,
+                        j,
+                    )
 
         # Free up memory in case we're running the random model next
         del activations
@@ -272,28 +298,34 @@ def main(args):
             model=random_model,
         )
 
-        for seed in range(args.n_seeds):
-            torch.manual_seed(seed)
+        for j in j_list:
+            for goal_square in range(3 if j == -1 else 1, args.max_goal_square + 1, 2):
+                for seed in range(args.n_seeds):
+                    torch.manual_seed(seed)
 
-            save_dir = base_dir / f"results/probing/{args.split}/{seed}"
-            save_dir.mkdir(parents=True, exist_ok=True)
+                    save_dir = base_dir / f"results/probing_{case_number}/{args.split}/{seed}/{goal_square+(j if j != -1 else 0)}"
+                    save_dir.mkdir(parents=True, exist_ok=True)
 
-            target_probes, source_probes = train_probes(
-                activations, puzzles, n_train, hparams
-            )
-            eval_probes(
-                target_probes,
-                source_probes,
-                puzzles,
-                activations,
-                n_train,
-                save_dir / "random_model.pkl",
-            )
+                    target_probes, source_probes = train_probes(
+                        activations, puzzles, n_train, hparams, goal_square, j
+                    )
+                    eval_probes(
+                        target_probes,
+                        source_probes,
+                        puzzles,
+                        activations,
+                        n_train,
+                        save_dir / "random_model.pkl",
+                        goal_square,
+                        j,
+                    )
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--device", default="cuda", type=str)
+    parser.add_argument("--filename", default="interesting_puzzles_without_corruptions", type=str)
+    parser.add_argument("--max_goal_square", default=5, type=int)
     parser.add_argument("--n_seeds", default=1, type=int)
     parser.add_argument("--base_dir", default=".", type=str)
     parser.add_argument("--n_puzzles", default=0, type=int)
@@ -301,5 +333,6 @@ if __name__ == "__main__":
     parser.add_argument("--main", action="store_true")
     parser.add_argument("--random_model", action="store_true")
     parser.add_argument("--split", default="all", type=str)
+    parser.add_argument("--double_game", action="store_true")
     args = parser.parse_args()
     main(args)

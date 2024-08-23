@@ -102,7 +102,7 @@ if __name__ == "__main__":
     parser.add_argument("--batch_size", default=100, type=int)
     parser.add_argument("--base_dir", default=".", type=str)
     parser.add_argument("--generate", action="store_true")
-    parser.add_argument("--n_puzzles", default=1_000_000, type=int)
+    parser.add_argument("--n_puzzles", default=4_062_423, type=int) # modified to 4.2M
     parser.add_argument("--hardness_threshold", default=0.05, type=float)
     parser.add_argument("--correctness_threshold", default=0.5, type=float)
     parser.add_argument("--forcing_threshold", default=0.7, type=float)

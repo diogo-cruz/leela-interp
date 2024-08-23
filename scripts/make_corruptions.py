@@ -218,7 +218,7 @@ def main(args):
     base_dir = Path(args.base_dir)
 
     try:
-        with open(base_dir / "interesting_puzzles_without_corruptions.pkl", "rb") as f:
+        with open(base_dir / (args.filename + "_without_corruptions.pkl"), "rb") as f:
             puzzles = pickle.load(f)
     except FileNotFoundError:
         raise ValueError("Puzzles not found, run make_puzzles.py first")
@@ -246,6 +246,7 @@ def main(args):
         )
 
     mask = [x is not None for x in corrupted_fens]
+    print(f"Discarding {len(corrupted_fens) - sum(mask)} corruptions")
     puzzles = puzzles[mask].copy()
 
     puzzles["corrupted_fen"] = pd.Series(
@@ -253,13 +254,14 @@ def main(args):
         index=puzzles.index,
     )
 
-    with open("interesting_puzzles.pkl", "wb") as f:
+    with open(base_dir / (args.filename + ".pkl"), "wb") as f:
         pickle.dump(puzzles, f)
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--device", default="cuda", type=str)
+    parser.add_argument("--filename", default="interesting_puzzles", type=str)
     parser.add_argument("--base_dir", default=".", type=str)
     parser.add_argument("--n_puzzles", default=0, type=int)
     parser.add_argument("--num_workers", default=4, type=int)

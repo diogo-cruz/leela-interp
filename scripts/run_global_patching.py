@@ -23,7 +23,7 @@ def main(args):
     save_dir.mkdir(parents=True, exist_ok=True)
 
     try:
-        with open(base_dir / "interesting_puzzles.pkl", "rb") as f:
+        with open(base_dir / (args.filename + ".pkl"), "rb") as f:
             puzzles = pickle.load(f)
     except FileNotFoundError:
         raise ValueError("Corrupted puzzles not found, run make_corruptions.py first")
@@ -39,7 +39,7 @@ def main(args):
             puzzles=puzzles,
             batch_size=args.batch_size,
         )
-        torch.save(effects, save_dir / "residual_stream_results.pt")
+        torch.save(effects, save_dir / (args.filename + "_residual_stream_results.pt"))
 
     if args.attention:
         # Ablate one attention head at a time
@@ -54,12 +54,13 @@ def main(args):
         effects = rearrange(
             effects, "batch (layer head) -> batch layer head", layer=15, head=24
         )
-        torch.save(effects, save_dir / "attention_head_results.pt")
+        torch.save(effects, save_dir / (args.filename + "_attention_head_results.pt"))
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--device", default="cuda", type=str)
+    parser.add_argument("--filename", default="interesting_puzzles", type=str)
     parser.add_argument("--batch_size", default=128, type=int)
     parser.add_argument("--base_dir", default=".", type=str)
     parser.add_argument("--n_puzzles", default=0, type=int)

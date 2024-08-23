@@ -17,10 +17,17 @@ EFFECTS_UPPER_RATIO = 1.0
 FONT_FAMILY = "Monaco"
 
 COLORS = [
-    "#00b894",
-    "#0984e3",
-    "#d63031",
-    "#495057",
+    "#1f77b4",  # tab:blue
+    "#ff7f0e",  # tab:orange
+    "#2ca02c",  # tab:green
+    "#d62728",  # tab:red
+    "#9467bd",  # tab:purple
+    "#8c564b",  # tab:brown
+    "#e377c2",  # tab:pink
+    "#7f7f7f",  # tab:gray
+    "#bcbd22",  # tab:olive
+    "#17becf",  # tab:cyan
+    "#000000",  # black
 ]
 COLOR_DICT = {
     "first_target": COLORS[0],
@@ -123,6 +130,7 @@ def plot_percentiles(
     y_upper=None,
     y_ticks=None,
     confidence=0.95,
+    verbose=False,
 ):
     if colors is None:
         colors = {}
@@ -160,9 +168,10 @@ def plot_percentiles(
             alpha=ERROR_ALPHA,
             linewidth=0,
         )
-        for i in print_percentiles:
-            print(
-                f"{i}th percentile ({name}): {percentiles[i * resolution // 100]:.2f} +- {(errors[i * resolution // 100, 1] - errors[i * resolution // 100, 0]) / 2:.2f}"
+        if verbose:
+            for i in print_percentiles:
+                print(
+                    f"{i}th percentile ({name}): {percentiles[i * resolution // 100]:.2f} +- {(errors[i * resolution // 100, 1] - errors[i * resolution // 100, 0]) / 2:.2f}"
             )
 
     ax1.legend()

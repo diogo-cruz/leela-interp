@@ -34,6 +34,7 @@ def get_lc0_pv_probabilities(
     wdls = []
     if pbar is None:
         pbar = len(puzzles) > batch_size
+    print(f"Running Lc0 on {len(puzzles)} puzzles in {len(puzzles) // batch_size} batches")
 
     _range = tqdm.trange if pbar else range
     for i in _range(0, len(puzzles), batch_size):
