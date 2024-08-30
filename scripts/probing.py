@@ -143,7 +143,7 @@ def eval_probe(target_probe, source_probe, puzzles, activations, name, n_train, 
 def train_probes(activations, puzzles, n_train, hparams, goal_square, j):
     target_probes = []
     for layer in range(15):
-        print(f"Layer {layer}")
+        #print(f"Layer {layer}")
         name = f"encoder{layer}/ln2"
         X, y, z_squares = collect_data(
             puzzles, activations, name, "target", n_train=n_train, goal_square=goal_square, j=j
@@ -153,7 +153,7 @@ def train_probes(activations, puzzles, n_train, hparams, goal_square, j):
 
     source_probes = []
     for layer in range(15):
-        print(f"Layer {layer}")
+        #print(f"Layer {layer}")
         name = f"encoder{layer}/ln2"
         X, y, z_squares = collect_data(
             puzzles, activations, name, "source", n_train=n_train, goal_square=goal_square, j=j
@@ -203,10 +203,12 @@ def main(args):
         #match = re.search(r'\d+$', args.filename)
         #case_number = match.group()
         case_number = args.filename.split("_")[-1]
-        with open(base_dir / f"{args.filename}.pkl", "rb") as f:
+        common_str = args.filename[20:-len(case_number)-1]
+        print(f"common_str: {common_str}")
+        with open(base_dir / f"puzzles/{args.filename}.pkl", "rb") as f:
             puzzles = pickle.load(f)
     except FileNotFoundError:
-        raise ValueError("Puzzles not found, run make_puzzles.py first")
+       raise ValueError("Puzzles not found, run make_puzzles.py first")
 
     if args.split == "all":
         pass
@@ -255,7 +257,7 @@ def main(args):
         )
 
         for j in j_list:
-            for goal_square in range(3 if j == -1 else 1, args.max_goal_square + 1, 2):
+            for goal_square in range(args.min_goal_square if j == -1 else 1, args.max_goal_square + 1, 2 if not args.add_opponent else 1):
                 for seed in range(args.n_seeds):
                     torch.manual_seed(seed)
 
@@ -263,7 +265,7 @@ def main(args):
                         activations, puzzles, n_train, hparams, goal_square, j
                     )
 
-                    save_dir = base_dir / f"results/probing_{case_number}/{args.split}/{seed}/{goal_square+(j if j != -1 else 0)}"
+                    save_dir = base_dir / f"results/probing_{common_str}_{case_number}/{args.split}/{seed}/{goal_square+(j if j != -1 else 0)}"
                     save_dir.mkdir(parents=True, exist_ok=True)
 
                     with open(save_dir / "target_probes.pkl", "wb") as f:
@@ -299,11 +301,11 @@ def main(args):
         )
 
         for j in j_list:
-            for goal_square in range(3 if j == -1 else 1, args.max_goal_square + 1, 2):
+            for goal_square in range(args.min_goal_square if j == -1 else 1, args.max_goal_square + 1, 2 if not args.add_opponent else 1):
                 for seed in range(args.n_seeds):
                     torch.manual_seed(seed)
 
-                    save_dir = base_dir / f"results/probing_{case_number}/{args.split}/{seed}/{goal_square+(j if j != -1 else 0)}"
+                    save_dir = base_dir / f"results/probing_{common_str}_{case_number}/{args.split}/{seed}/{goal_square+(j if j != -1 else 0)}"
                     save_dir.mkdir(parents=True, exist_ok=True)
 
                     target_probes, source_probes = train_probes(
@@ -334,5 +336,7 @@ if __name__ == "__main__":
     parser.add_argument("--random_model", action="store_true")
     parser.add_argument("--split", default="all", type=str)
     parser.add_argument("--double_game", action="store_true")
+    parser.add_argument("--add_opponent", action="store_true")
+    parser.add_argument("--min_goal_square", default=3, type=int)
     args = parser.parse_args()
     main(args)
