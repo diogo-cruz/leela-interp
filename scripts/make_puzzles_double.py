@@ -71,8 +71,8 @@ def main(args):
     )
 
     interesting_1 = puzzles["Themes"].apply(lambda x: "mateIn2" in x)
-    #interesting_2 = puzzles["full_pv_probs"].apply(lambda x: 0.3 <= x[0] <= 0.5)
-    interesting_2 = puzzles["full_pv_probs"].apply(lambda x: x[0] <= 0.3)
+    #interesting_2 = puzzles["full_pv_probs"].apply(lambda x: 0.3 <= x[0] <= 0.5) # double
+    interesting_2 = puzzles["full_pv_probs"].apply(lambda x: x[0] <= 0.3) # doublelow
     interesting_3 = puzzles["principal_variation"].apply(lambda x: x[0][2:4] != x[2][2:4])
     interesting = interesting_1 & interesting_2 & interesting_3
 

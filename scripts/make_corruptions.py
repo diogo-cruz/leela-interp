@@ -74,6 +74,30 @@ def get_corruptions(board: chess.Board, required_legal_move):
 
     return rv
 
+def get_corruptions_2(board: chess.Board, required_legal_move_1, required_legal_move_2):
+    """Generate corruptions of a board that lead to valid positions and preserve
+    a given move as legal.
+
+    (We later want to make sure that corruptions don't just make the previous top move
+    illegal.)
+    """
+    rv = {}
+    required_legal_move_1 = chess.Move.from_uci(required_legal_move_1)
+    required_legal_move_2 = chess.Move.from_uci(required_legal_move_2)
+
+    # Add or remove individual pieces
+    for key, new_board in corruption_generator(board):
+        # Check if the board is still valid.
+        if not new_board.is_valid():
+            continue
+        # Check if required_legal_move is still legal.
+        if required_legal_move_1 not in new_board.legal_moves or required_legal_move_2 not in new_board.legal_moves:
+            continue
+
+        rv[key] = new_board
+
+    return rv
+
 
 def value_fn(wdl):
     """Compute win probability minus loss probability, as a metric for the value of a position."""
@@ -97,6 +121,25 @@ class CandidateCorruptionsDataset(torch.utils.data.Dataset):
         move = puzzle.principal_variation[0]
 
         corruptions = get_corruptions(board.pc_board, move)
+        corruptions = [LeelaBoard.from_fen(v.fen()) for v in corruptions.values()]
+        # for batch_size in self.batch_sizes:
+        #     if batch_size >= len(corruptions):
+        #         break
+        # missing = batch_size - len(corruptions)
+        # if missing < 0:
+        #     corruptions = corruptions[:batch_size]
+        # corruptions += [LeelaBoard() for _ in range(missing)]
+        return board, corruptions
+    
+class CandidateCorruptionsDataset2(CandidateCorruptionsDataset):
+
+    def __getitem__(self, idx):
+        puzzle = self.puzzles.iloc[idx]
+        board = LeelaBoard.from_puzzle(puzzle)
+        move_1 = puzzle.branch_1[0]
+        move_2 = puzzle.branch_2[0]
+
+        corruptions = get_corruptions_2(board.pc_board, move_1, move_2)
         corruptions = [LeelaBoard.from_fen(v.fen()) for v in corruptions.values()]
         # for batch_size in self.batch_sizes:
         #     if batch_size >= len(corruptions):
@@ -165,6 +208,75 @@ def compute_scores(
     scores = torch.where(mask.bool(), jsd, float("inf"))
     return scores.topk(1, largest=False)
 
+def compute_scores_2(
+    corrupted_policy,
+    original_sparring_policy,
+    sparring_corrupted_policy,
+    original_wdl,
+    corrupted_wdl,
+    move_idx,
+    move_idx_2,
+):
+    # 1. We don't want to use cases where the probability of the correct move under the
+    # sparring model decreases too much, even if it was already low. These corruptions
+    # often correspond to making the move bad for "obvious" reasons (e.g. placing an
+    # opponent pawn that attacks the target square of the move). We later minimize JSD
+    # between clean and corrupted sparring policy, but if the probability of the top
+    # move was already very low, it might not have a big enough effect on that.
+    sparring_log_odds = torch.log(
+        original_sparring_policy[move_idx] / (1 - original_sparring_policy[move_idx])
+    )
+    sparring_corrupted_log_odds = torch.log(
+        sparring_corrupted_policy[:, move_idx]
+        / (1 - sparring_corrupted_policy[:, move_idx])
+    )
+    sparring_decrease = sparring_log_odds[None] - sparring_corrupted_log_odds
+
+    sparring_log_odds_2 = torch.log(
+        original_sparring_policy[move_idx_2] / (1 - original_sparring_policy[move_idx_2])
+    )
+    sparring_corrupted_log_odds_2 = torch.log(
+        sparring_corrupted_policy[:, move_idx_2]
+        / (1 - sparring_corrupted_policy[:, move_idx_2])
+    )
+    sparring_decrease_2 = sparring_log_odds_2[None] - sparring_corrupted_log_odds_2
+
+    mask = (sparring_decrease < 0.2).float()
+    mask *= (sparring_decrease_2 < 0.2).float()
+
+    # 2. We don't want the corruption to make the position *better*, that would indicate
+    # that there's just some other move now that's even better, rather than the previous
+    # move having gotten worse.
+    value = value_fn(original_wdl)
+    corrupted_value = value_fn(corrupted_wdl)
+    value_change = corrupted_value - value
+    mask *= (value_change < -0.1).float()
+
+    # 3. We also want the new probability to be reasonably low, i.e. the previous top
+    # move should now be bad. This is necessary to make activation patching useful
+    # at all (if the corruption doesn't change the best move by much, there's no reason
+    # to expect a clear effect from patching).
+    mask *= (corrupted_policy[:, move_idx] < 0.1).float()
+    mask *= (corrupted_policy[:, move_idx_2] < 0.1).float()
+
+    # Finally, pick the corruption with the lowest JSD between the sparring policy on
+    # the original and corrupted position.
+    original_sparring_policy = original_sparring_policy.unsqueeze(0)
+    M = (original_sparring_policy + sparring_corrupted_policy) / 2
+    # This indirect way is just to compute the JSD in a way that's robust to zeros.
+    kl_terms_1 = original_sparring_policy * torch.log(original_sparring_policy / M)
+    kl_terms_2 = sparring_corrupted_policy * torch.log(sparring_corrupted_policy / M)
+    kl_terms_1 = torch.where(original_sparring_policy > 0, kl_terms_1, 0.0)
+    kl_terms_2 = torch.where(sparring_corrupted_policy > 0, kl_terms_2, 0.0)
+    kl1 = torch.sum(kl_terms_1, dim=1)
+    kl2 = torch.sum(kl_terms_2, dim=1)
+    jsd = 0.5 * (kl1 + kl2)
+
+    assert jsd.shape == value_change.shape, (jsd.shape, value_change.shape)
+
+    scores = torch.where(mask.bool(), jsd, float("inf"))
+    return scores.topk(1, largest=False)
+
 
 def get_best_corruption(
     original_board: LeelaBoard,
@@ -211,6 +323,54 @@ def get_best_corruption(
         return None
     return corruptions[idx]
 
+def get_best_corruption_2(
+    original_board: LeelaBoard,
+    corruptions: list[LeelaBoard],
+    big_model: Lc0Model,
+    sparring_model: Lc0Model,
+):
+    # If for some reason a board has no valid corruptions, just skip it.
+    if len(corruptions) == 0:
+        return None
+
+    # Insert the original board into the corruptions so we can do everything in one
+    # batch.
+    corruptions.append(original_board)
+
+    policy, wdl, _ = big_model.batch_play(corruptions)
+    sparring_policy, *_ = sparring_model.batch_play(corruptions)
+
+    original_policy = policy[-1]
+    original_wdl = wdl[-1]
+    original_sparring_policy = sparring_policy[-1]
+
+    corrupted_policy = policy[:-1]
+    corrupted_wdl = wdl[:-1]
+    sparring_corrupted_policy = sparring_policy[:-1]
+
+    # Find the top move according to the big model
+    probs, move_idxs = original_policy.topk(2)
+    move_idx, move_idx_2 = move_idxs
+    move_idx = move_idx.item()
+    move_idx_2 = move_idx_2.item()
+
+    # Now filter out undesirable corruptions.
+    score, idx = compute_scores_2(
+        corrupted_policy=corrupted_policy,
+        original_sparring_policy=original_sparring_policy,
+        sparring_corrupted_policy=sparring_corrupted_policy,
+        original_wdl=original_wdl,
+        corrupted_wdl=corrupted_wdl,
+        move_idx=move_idx,
+        move_idx_2=move_idx_2,
+    )
+    score = score.item()
+    idx = idx.item()
+    if score > 0.2:
+        # If our score is too bad, we skip this board
+        return None
+    return corruptions[idx]
+
 
 def main(args):
     torch.set_num_threads(args.num_threads)
@@ -218,7 +378,7 @@ def main(args):
     base_dir = Path(args.base_dir)
 
     try:
-        with open(base_dir / (args.filename + "_without_corruptions.pkl"), "rb") as f:
+        with open(base_dir / ("puzzles/" + args.filename + "_without_corruptions.pkl"), "rb") as f:
             puzzles = pickle.load(f)
     except FileNotFoundError:
         raise ValueError("Puzzles not found, run make_puzzles.py first")
@@ -229,7 +389,10 @@ def main(args):
     if args.n_puzzles:
         puzzles = puzzles.iloc[: args.n_puzzles]
 
-    dataset = CandidateCorruptionsDataset(puzzles)
+    if args.branch_2:
+        dataset = CandidateCorruptionsDataset2(puzzles)
+    else:
+        dataset = CandidateCorruptionsDataset(puzzles)
     dataloader = torch.utils.data.DataLoader(
         dataset, batch_size=None, shuffle=False, num_workers=args.num_workers
     )
@@ -237,10 +400,16 @@ def main(args):
     corrupted_fens = []
 
     for batch in tqdm.tqdm(dataloader):
-        board, corruptions = batch
-        corrupted_board = get_best_corruption(
-            board, corruptions, big_model, sparring_model
-        )
+        if args.branch_2:
+            board, corruptions = batch
+            corrupted_board = get_best_corruption_2(
+                board, corruptions, big_model, sparring_model
+            )
+        else:
+            board, corruptions = batch
+            corrupted_board = get_best_corruption(
+                board, corruptions, big_model, sparring_model
+            )
         corrupted_fens.append(
             None if corrupted_board is None else corrupted_board.fen()
         )
@@ -254,7 +423,7 @@ def main(args):
         index=puzzles.index,
     )
 
-    with open(base_dir / (args.filename + ".pkl"), "wb") as f:
+    with open(base_dir / ("puzzles/" + args.filename + ".pkl"), "wb") as f:
         pickle.dump(puzzles, f)
 
 
@@ -262,6 +431,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--device", default="cuda", type=str)
     parser.add_argument("--filename", default="interesting_puzzles", type=str)
+    parser.add_argument("--branch_2", action="store_true")
     parser.add_argument("--base_dir", default=".", type=str)
     parser.add_argument("--n_puzzles", default=0, type=int)
     parser.add_argument("--num_workers", default=4, type=int)
