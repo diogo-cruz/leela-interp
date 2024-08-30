@@ -90,6 +90,130 @@ def third_to_first_vs_other_ablations(model, boards, puzzles, args):
 
     return third_to_first_effects.squeeze(-1), other_effects.squeeze(-1)
 
+def third_to_first_vs_other_double_branch_ablations(model, boards, puzzles, args):
+    first_target_squares_1 = puzzles.branch_1.apply(lambda x: x[0][2:4])
+    third_target_squares_1 = puzzles.branch_1.apply(lambda x: x[2][2:4])
+    first_target_squares_2 = puzzles.branch_2.apply(lambda x: x[0][2:4])
+    third_target_squares_2 = puzzles.branch_2.apply(lambda x: x[2][2:4])
+    first_target_indices_1 = torch.tensor(
+        [board.sq2idx(sq) for board, sq in zip(boards, first_target_squares_1)]
+    )
+    third_target_indices_1 = torch.tensor(
+        [board.sq2idx(sq) for board, sq in zip(boards, third_target_squares_1)]
+    )
+    first_target_indices_2 = torch.tensor(
+        [board.sq2idx(sq) for board, sq in zip(boards, first_target_squares_2)]
+    )
+    third_target_indices_2 = torch.tensor(
+        [board.sq2idx(sq) for board, sq in zip(boards, third_target_squares_2)]
+    )
+
+    def _third_1_to_first_1_ablate(location, model, batch_indices):
+        layer, head = location
+        model.attention_scores(layer).output[
+            torch.arange(len(batch_indices)),
+            head,
+            first_target_indices_1[batch_indices],
+            third_target_indices_1[batch_indices],
+        ] = 0
+
+    def _third_2_to_first_2_ablate(location, model, batch_indices):
+        layer, head = location
+        model.attention_scores(layer).output[
+            torch.arange(len(batch_indices)),
+            head,
+            first_target_indices_2[batch_indices],
+            third_target_indices_2[batch_indices],
+        ] = 0
+
+    def _third_1_to_first_2_ablate(location, model, batch_indices):
+        layer, head = location
+        model.attention_scores(layer).output[
+            torch.arange(len(batch_indices)),
+            head,
+            first_target_indices_1[batch_indices],
+            third_target_indices_2[batch_indices],
+        ] = 0
+
+    def _third_2_to_first_1_ablate(location, model, batch_indices):
+        layer, head = location
+        model.attention_scores(layer).output[
+            torch.arange(len(batch_indices)),
+            head,
+            first_target_indices_2[batch_indices],
+            third_target_indices_1[batch_indices],
+        ] = 0
+
+    def _other_ablate(location, model, batch_indices):
+        layer, head = location
+        other_mask = torch.ones(
+            len(batch_indices), 64, 64, dtype=torch.bool, device=args.device
+        )
+        other_mask[
+            torch.arange(len(batch_indices)),
+            first_target_indices_1[batch_indices],
+            third_target_indices_1[batch_indices],
+        ] = False
+        other_mask[
+            torch.arange(len(batch_indices)),
+            first_target_indices_1[batch_indices],
+            third_target_indices_2[batch_indices],
+        ] = False
+        other_mask[
+            torch.arange(len(batch_indices)),
+            first_target_indices_2[batch_indices],
+            third_target_indices_1[batch_indices],
+        ] = False
+        other_mask[
+            torch.arange(len(batch_indices)),
+            first_target_indices_2[batch_indices],
+            third_target_indices_2[batch_indices],
+        ] = False
+        model.attention_scores(layer).output[:, head][other_mask] = 0
+
+    third_1_to_first_1_effects = -patching.patch(
+        patching_func=_third_1_to_first_1_ablate,
+        locations=[(args.layer, args.head)],
+        model=model,
+        boards=boards,
+        batch_size=args.batch_size,
+        pbar="batch",
+    )
+    third_2_to_first_2_effects = -patching.patch(
+        patching_func=_third_2_to_first_2_ablate,
+        locations=[(args.layer, args.head)],
+        model=model,
+        boards=boards,
+        batch_size=args.batch_size,
+        pbar="batch",
+    )
+    third_1_to_first_2_effects = -patching.patch(
+        patching_func=_third_1_to_first_2_ablate,
+        locations=[(args.layer, args.head)],
+        model=model,
+        boards=boards,
+        batch_size=args.batch_size,
+        pbar="batch",
+    )
+    third_2_to_first_1_effects = -patching.patch(
+        patching_func=_third_2_to_first_1_ablate,
+        locations=[(args.layer, args.head)],
+        model=model,
+        boards=boards,
+        batch_size=args.batch_size,
+        pbar="batch",
+    )
+    other_effects = -patching.patch(
+        patching_func=_other_ablate,
+        locations=[(args.layer, args.head)],
+        model=model,
+        boards=boards,
+        batch_size=args.batch_size,
+        pbar="batch",
+    )
+
+    return third_1_to_first_1_effects.squeeze(-1), third_2_to_first_2_effects.squeeze(-1), third_1_to_first_2_effects.squeeze(-1), third_2_to_first_1_effects.squeeze(-1), other_effects.squeeze(-1)
+
 def case_ABC_vs_other_ablations(model, boards, puzzles, args):
     first_target_squares = puzzles.principal_variation.apply(lambda x: x[0][2:4])
     third_target_squares = puzzles.principal_variation.apply(lambda x: x[2][2:4])
@@ -407,6 +531,104 @@ def case_ABCD_vs_other_ablations(model, boards, puzzles, args):
 
     return third_to_first_effects.squeeze(-1), fifth_to_first_effects.squeeze(-1), fifth_to_third_effects.squeeze(-1), seventh_to_first_effects.squeeze(-1), seventh_to_third_effects.squeeze(-1), seventh_to_fifth_effects.squeeze(-1), other_effects.squeeze(-1)
 
+def case_AACD_vs_other_ablations(model, boards, puzzles, args):
+    first_target_squares = puzzles.principal_variation.apply(lambda x: x[0][2:4])
+    fifth_target_squares = puzzles.principal_variation.apply(lambda x: x[4][2:4])
+    seventh_target_squares = puzzles.principal_variation.apply(lambda x: x[6][2:4])
+    first_target_indices = torch.tensor(
+        [board.sq2idx(sq) for board, sq in zip(boards, first_target_squares)]
+    )
+    fifth_target_indices = torch.tensor(
+        [board.sq2idx(sq) for board, sq in zip(boards, fifth_target_squares)]
+    )
+    seventh_target_indices = torch.tensor(
+        [board.sq2idx(sq) for board, sq in zip(boards, seventh_target_squares)]
+    )
+
+    def _fifth_to_first_ablate(location, model, batch_indices):
+        layer, head = location
+        model.attention_scores(layer).output[
+            torch.arange(len(batch_indices)),
+            head,
+            first_target_indices[batch_indices],
+            fifth_target_indices[batch_indices],
+        ] = 0
+
+    def _seventh_to_first_ablate(location, model, batch_indices):
+        layer, head = location
+        model.attention_scores(layer).output[
+            torch.arange(len(batch_indices)),
+            head,
+            first_target_indices[batch_indices],
+            seventh_target_indices[batch_indices],
+        ] = 0
+
+    def _seventh_to_fifth_ablate(location, model, batch_indices):
+        layer, head = location
+        model.attention_scores(layer).output[
+            torch.arange(len(batch_indices)),
+            head,
+            fifth_target_indices[batch_indices],
+            seventh_target_indices[batch_indices],
+        ] = 0
+
+    def _other_ablate(location, model, batch_indices):
+        layer, head = location
+        other_mask = torch.ones(
+            len(batch_indices), 64, 64, dtype=torch.bool, device=args.device
+        )
+        other_mask[
+            torch.arange(len(batch_indices)),
+            first_target_indices[batch_indices],
+            fifth_target_indices[batch_indices],
+        ] = False
+        other_mask[
+            torch.arange(len(batch_indices)),
+            first_target_indices[batch_indices],
+            seventh_target_indices[batch_indices],
+        ] = False
+        other_mask[
+            torch.arange(len(batch_indices)),
+            fifth_target_indices[batch_indices],
+            seventh_target_indices[batch_indices],
+        ] = False
+        model.attention_scores(layer).output[:, head][other_mask] = 0
+
+    fifth_to_first_effects = -patching.patch(
+        patching_func=_fifth_to_first_ablate,
+        locations=[(args.layer, args.head)],
+        model=model,
+        boards=boards,
+        batch_size=args.batch_size,
+        pbar="batch",
+    )
+    seventh_to_first_effects = -patching.patch(
+        patching_func=_seventh_to_first_ablate,
+        locations=[(args.layer, args.head)],
+        model=model,
+        boards=boards,
+        batch_size=args.batch_size,
+        pbar="batch",
+    )
+    seventh_to_fifth_effects = -patching.patch(
+        patching_func=_seventh_to_fifth_ablate,
+        locations=[(args.layer, args.head)],
+        model=model,
+        boards=boards,
+        batch_size=args.batch_size,
+        pbar="batch",
+    )
+    other_effects = -patching.patch(
+        patching_func=_other_ablate,
+        locations=[(args.layer, args.head)],
+        model=model,
+        boards=boards,
+        batch_size=args.batch_size,
+        pbar="batch",
+    )
+
+    return fifth_to_first_effects.squeeze(-1), seventh_to_first_effects.squeeze(-1), seventh_to_fifth_effects.squeeze(-1), other_effects.squeeze(-1)
+
 def attention_pattern(model, boards, args):
     pattern = torch.zeros(len(boards), 64, 64, device=args.device)
     scores = torch.zeros(len(boards), 64, 64, device=args.device)
@@ -442,8 +664,9 @@ def main(args):
     model = Lc0sight(base_dir / "lc0.onnx", device=args.device)
 
     match = re.search(r'\d+$', args.filename)
-    case_number = match.group()
+    case_number = args.filename.split("_")[-1]
     case_size = len(case_number)
+    common_str = args.filename[20:-len(case_number)-1]
 
     if match and (case_size in [5, 7, 9]):
         if case_size == 5:
@@ -453,24 +676,37 @@ def main(args):
             else:
                 if case_number[0] == case_number[4]:
                     case_type = "ABA"
+                elif case_number[2] == case_number[4]:
+                    case_type = "ABB"
                 else:
                     case_type = "ABC"
         elif case_size == 7:
-            if len(set(case_number[::2])) == 4:
-                case_type = "ABCD"
+            if case_number[0] == case_number[2]:
+                if len(set(list(case_number[::2]))) == 3:
+                    case_type = "AACD"
+                else:
+                    raise NotImplementedError
             else:
-                raise NotImplementedError
+                if len(set(list(case_number[::2]))) == 4:
+                    case_type = "ABCD"
+                else:
+                    raise NotImplementedError
+        else:
+            raise NotImplementedError
     else:
-        case_type = "AB"
+        if case_number[0] == case_number[2]:
+            case_type = "AB"
+        else:
+            raise NotImplementedError
 
     # if case_type == "AB":
     #     save_dir = base_dir / f"results/L{args.layer}H{args.head}"
     # else:
-    save_dir = base_dir / f"results/L{args.layer}H{args.head}_{case_number}"
+    save_dir = base_dir / f"results/L{args.layer}H{args.head}_{common_str}_{case_number}"
     save_dir.mkdir(parents=True, exist_ok=True)
 
     try:
-        with open(base_dir / (args.filename + ".pkl"), "rb") as f:
+        with open(base_dir / ("puzzles/" + args.filename + ".pkl"), "rb") as f:
             puzzles = pickle.load(f)
     except FileNotFoundError:
         raise ValueError("Corrupted puzzles not found, run make_corruptions.py first")
@@ -481,12 +717,22 @@ def main(args):
     boards = [LeelaBoard.from_puzzle(puzzle) for _, puzzle in puzzles.iterrows()]
 
     if args.main:
-        if case_type == "AB" or case_type == "ABA":
-            third_to_first_effects, other_effects = third_to_first_vs_other_ablations(
-                model, boards, puzzles, args
-            )
-            torch.save(third_to_first_effects, save_dir / "third_to_first_ablation.pt")
-            torch.save(other_effects, save_dir / "other_ablation.pt")
+        if case_type == "AB" or case_type == "ABA" or case_type == "ABB":
+            if args.double_game:
+                third_1_to_first_1_effects, third_2_to_first_2_effects, third_1_to_first_2_effects, third_2_to_first_1_effects, other_effects = third_to_first_vs_other_double_branch_ablations(
+                    model, boards, puzzles, args
+                )
+                torch.save(third_1_to_first_1_effects, save_dir / "third_1_to_first_1_ablation.pt")
+                torch.save(third_2_to_first_2_effects, save_dir / "third_2_to_first_2_ablation.pt")
+                torch.save(third_1_to_first_2_effects, save_dir / "third_1_to_first_2_ablation.pt")
+                torch.save(third_2_to_first_1_effects, save_dir / "third_2_to_first_1_ablation.pt")
+                torch.save(other_effects, save_dir / "other_ablation.pt")
+            else:
+                third_to_first_effects, other_effects = third_to_first_vs_other_ablations(
+                    model, boards, puzzles, args
+                )
+                torch.save(third_to_first_effects, save_dir / "third_to_first_ablation.pt")
+                torch.save(other_effects, save_dir / "other_ablation.pt")
         elif case_type == "AAC":
             fifth_to_first_effects, other_effects = case_AAC_vs_other_ablations(
                 model, boards, puzzles, args
@@ -512,6 +758,14 @@ def main(args):
             torch.save(seventh_to_third_effects, save_dir / "seventh_to_third_ablation.pt")
             torch.save(seventh_to_fifth_effects, save_dir / "seventh_to_fifth_ablation.pt")
             torch.save(other_effects, save_dir / "other_ablation.pt")
+        elif case_type == "AACD":
+            fifth_to_first_effects, seventh_to_first_effects, seventh_to_fifth_effects, other_effects = case_AACD_vs_other_ablations(
+                model, boards, puzzles, args
+            )
+            torch.save(fifth_to_first_effects, save_dir / "fifth_to_first_ablation.pt")
+            torch.save(seventh_to_first_effects, save_dir / "seventh_to_first_ablation.pt")
+            torch.save(seventh_to_fifth_effects, save_dir / "seventh_to_fifth_ablation.pt")
+            torch.save(other_effects, save_dir / "other_ablation.pt")
 
     if args.squarewise:
         effects = squarewise_patching(model, puzzles, args)
@@ -535,6 +789,7 @@ if __name__ == "__main__":
     parser.add_argument("--layer", default=12, type=int)
     parser.add_argument("--head", default=12, type=int)
     parser.add_argument("--batch_size", default=128, type=int)
+    parser.add_argument("--double_game", action="store_true")
     parser.add_argument("--squarewise", action="store_true")
     parser.add_argument("--single_weight", action="store_true")
     parser.add_argument("--attention_pattern", action="store_true")

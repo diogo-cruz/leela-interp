@@ -215,20 +215,30 @@ class DoubleMateStudy:
 
         return new_fen
 
-    def get_attributions(self):
+    def get_attributions(self, layer=12, head=12, topk=4, k=64*64, skip_colors=False):
         self.attribution_boards = []
         self.attribution_values = []
         for board in self.boards:
             attribution = attention_attribution(
-                [board], layer=12, head=12, model=self.model, return_pt=True
+                [board], layer=layer, head=head, model=self.model, return_pt=True
             )[0]
-            values, colors = top_k_attributions(attribution, board, k=64*64)
-            colors = {k: v for k, v in reversed(list(colors.items())[:4])}
+            values, colors = top_k_attributions(attribution, board, k=k)
             self.attribution_values.append(values)
-            self.attribution_boards.append(board.plot(arrows=colors, show_lastmove=False))
+
+            if not skip_colors:
+                colors = {k: v for k, v in reversed(list(colors.items())[:topk])}
+                self.attribution_boards.append(board.plot(arrows=colors, show_lastmove=False))
 
         if self.save_plots:
             self.save_values()
+
+    def get_attributions_fast(self, layer=12, head=12, topk=4, k=64*64, skip_colors=False):
+        self.attribution_boards = []
+        self.attribution_values = []
+        attribution = attention_attribution(
+            self.boards, layer=layer, head=head, model=self.model, return_pt=True
+        )
+        self.attribution_values = attribution
 
     def save_values(self):
         
@@ -248,6 +258,6 @@ class DoubleMateStudy:
             ax.set_xlabel('Rank')
             ax.set_ylabel('Absolute move attribution value')
 
-            fig.savefig('double_mate/' + self.filetime + '_values_' + str(i) + '.pdf', bbox_inches='tight')
+            fig.savefig('double_mate/' + self.filetime + '_values_' + str(i), bbox_inches='tight')
 
 

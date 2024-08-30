@@ -26,9 +26,12 @@ from leela_interp.tools.piece_movement_heads import (
 )
 from scipy.stats import binned_statistic
 from tqdm import tqdm
+import warnings
 
 class EffectStudy:
     def __init__(self, model, puzzlename='', device='cpu', include_starting=False, n_examples=100, alt_puzzles=False):
+        # Write deprecation warning
+        warnings.warn("EffectStudy is deprecated. Use GeneralStudy instead.", DeprecationWarning)
         self.model = model
         self.puzzlename = ("_" if puzzlename != "" else "") + puzzlename
         self.device = device
@@ -1117,10 +1120,20 @@ class AblationStudy:
 
     @staticmethod
     def pretty_prefix(prefix):
-        first_number, _, second_number = prefix.split("_")
+        prefixes = prefix.split("_")
+        if len(prefixes) == 3:
+            first_number, _, second_number = prefixes
+            char_1 = ''
+            char_2 = ''
+        elif len(prefixes) == 5:
+            first_number, ind_1, _, second_number, ind_2 = prefixes
+            char_1 = '' if ind_1 == '1' else 'B'
+            char_2 = '' if ind_2 == '1' else 'B'
+        else:
+            raise NotImplementedError
         first_number = AblationStudy.word_to_number(first_number) + first_number[-2:]
         second_number = AblationStudy.word_to_number(second_number) + second_number[-2:]
-        return first_number + r"$\to$" + second_number + ' target'
+        return first_number + char_1 + r"$\to$" + second_number + char_2 + ' target'
 
     def plot_ablation_effects(self, mask=None, verbose=False, filename=None, puzzle_set=None, LH=None):
         if mask is None:
@@ -1134,6 +1147,9 @@ class AblationStudy:
             r"7th$\to$1st target": fh.COLORS[3],
             r"7th$\to$3rd target": fh.COLORS[4],
             r"7th$\to$5th target": fh.COLORS[5],
+            r"3rd$\to$1stB target": fh.COLORS[6],
+            r"3rdB$\to$1st target": fh.COLORS[7],
+            r"3rdB$\to$1stB target": fh.COLORS[8],
         }
 
         # Sorted dictionary of ablation

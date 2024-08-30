@@ -82,7 +82,8 @@ def save(path, fig=None):
         fig = plt.gcf()
 
     plt.tight_layout()
-    fig.savefig(path)
+    fig.savefig(path + '.pdf')
+    fig.savefig(path + '.png', dpi=300)
     plt.show()
 
 
@@ -131,6 +132,7 @@ def plot_percentiles(
     y_ticks=None,
     confidence=0.95,
     verbose=False,
+    axs=None,
 ):
     if colors is None:
         colors = {}
@@ -143,9 +145,12 @@ def plot_percentiles(
     if zoom_start is None:
         fig, ax1 = plt.subplots(1, 1, figsize=figsize)
     else:
-        fig, (ax1, ax2) = plt.subplots(
-            1, 2, figsize=figsize, sharey=False, width_ratios=[1, zoom_width_ratio]
-        )
+        if axs is None:
+            fig, (ax1, ax2) = plt.subplots(
+                1, 2, figsize=figsize, sharey=False, width_ratios=[1, zoom_width_ratio]
+            )
+        else:
+            ax1, ax2 = axs
 
     # Plot full range percentiles
     xs = np.linspace(0, 100, resolution + 1)
@@ -174,7 +179,7 @@ def plot_percentiles(
                     f"{i}th percentile ({name}): {percentiles[i * resolution // 100]:.2f} +- {(errors[i * resolution // 100, 1] - errors[i * resolution // 100, 0]) / 2:.2f}"
             )
 
-    ax1.legend()
+    ax1.legend(loc='upper left')
     ax1.set_xlabel("Percentile")
     ax1.set_ylabel("Log odds reduction")
     ax1.set_title(title)
@@ -221,7 +226,7 @@ def plot_percentiles(
         ax2.set_xlim(zoom_start - 0.5, 100.5)
         ax2.set_ylim(ax1.get_ylim())
         ax2.set_yticks(np.arange(0, 10, 1), minor=True)
-        ax2.set_yticklabels([])
+        #ax2.set_yticklabels([])
         ax2.tick_params(axis="y", which="both", length=0)
 
     axes = [ax1]
@@ -236,7 +241,7 @@ def plot_percentiles(
         ax.grid(which="minor", alpha=0.3, linestyle="--")
 
     plt.tight_layout()
-    return fig
+    return fig if axs is None else None
 
 
 class SkiaPath(ice.Path):

@@ -23,7 +23,7 @@ def main(args):
     save_dir.mkdir(parents=True, exist_ok=True)
 
     try:
-        with open(base_dir / (args.filename + ".pkl"), "rb") as f:
+        with open(base_dir / ("puzzles/" + args.filename + ".pkl"), "rb") as f:
             puzzles = pickle.load(f)
     except FileNotFoundError:
         raise ValueError("Corrupted puzzles not found, run make_corruptions.py first")

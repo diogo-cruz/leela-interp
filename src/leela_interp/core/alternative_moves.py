@@ -46,7 +46,58 @@ def get_top_moves(
         top_dict[model_move] = {'prob': top_moves[model_move]}
         top_dict[model_move] = top_dict[model_move] | top_dict_partial
 
-    #print(limit, top_dict)
+    return top_dict
+
+def get_double_branch_moves(
+    model: Lc0Model,
+    board: LeelaBoard,
+    limit: int = 0,
+    end: int = 3,
+    min_prob: float | list[float] = 0.1,
+) -> dict[str, dict[str, float]] | None:
+    
+    if limit == end:
+        return {}
+
+    if not isinstance(min_prob, float):
+        tol = min_prob[limit]
+    else:
+        tol = min_prob
+
+    policy, _, _ = model.batch_play([board], return_probs=True)
+    not_nan = ~torch.isnan(policy).any(-1)
+    num_not_nan = not_nan.sum().item()
+    assert isinstance(num_not_nan, int)  # make the type checker happy
+    assert torch.allclose(
+        policy[not_nan].sum(-1),
+        torch.ones(num_not_nan, device=policy.device),
+    ), policy.sum(-1)
+
+    try:
+        top_moves = model.top_moves(board, policy[0], top_k=None)
+    except AssertionError:
+        return None
+
+    # Remove all entries where val is not above 0.1
+    top_moves = {k: v for k, v in top_moves.items() if v > tol}
+    if limit == 0:
+        if len(top_moves) != 2:
+            return None
+    else:
+        if len(top_moves) != 1:
+            return None
+    model_moves = list(top_moves.keys())
+
+    top_dict = {}
+    for model_move in model_moves:
+        new_board = board.copy()
+        new_board.push_uci(model_move)
+        top_dict_partial = get_double_branch_moves(model, new_board, limit+1, end, min_prob=min_prob)
+        if top_dict_partial is None:
+            return None
+        top_dict[model_move] = {'prob': top_moves[model_move]}
+        top_dict[model_move] = top_dict[model_move] | top_dict_partial
+
     return top_dict
 
 def check_if_double_game(model: Lc0Model, puzzle):
@@ -71,6 +122,37 @@ def check_if_double_game(model: Lc0Model, puzzle):
                 continue
             if len(third_round_moves) != 2:
                 return False
+    
+    return (correct_moves, total_moveset)
+
+def check_if_double_game_fast(model: Lc0Model, puzzle, end: int = 3, min_prob: float | list[float] = 0.1):
+    #display(puzzle)
+    board = LeelaBoard.from_puzzle(puzzle)
+    correct_moves = puzzle.Moves.split()
+    correct_moves[0] = 'init'
+    top_moves = get_double_branch_moves(model, board, limit=0, end=end, min_prob=min_prob)
+    if top_moves == {} or top_moves is None:
+        return False
+
+    #print(top_moves)
+
+    total_moveset = {correct_moves[0]: {'prob': 1.0} | top_moves}
+    
+    # zeroth_move = list(total_moveset)[0]
+    # first_round_moves = total_moveset[zeroth_move]
+    # if len(first_round_moves) != 3:
+    #     return False
+    
+    # for first_move, second_round_moves in first_round_moves.items():
+    #     if first_move == 'prob':
+    #         continue
+    #     if len(second_round_moves) != 2:
+    #         return False
+    #     for second_move, third_round_moves in second_round_moves.items():
+    #         if second_move == 'prob':
+    #             continue
+    #         if len(third_round_moves) != 2:
+    #             return False
     
     return (correct_moves, total_moveset)
 

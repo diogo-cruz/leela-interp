@@ -17,7 +17,7 @@ from matplotlib.patches import Patch
 import torch
 from leela_interp import Lc0Model, Lc0sight, LeelaBoard
 from leela_interp.core.iceberg_board import palette
-from leela_interp.core.alternative_moves import check_if_double_game
+from leela_interp.core.alternative_moves import check_if_double_game, check_if_double_game_fast
 from leela_interp.core.effect_study import EffectStudy
 from leela_interp.tools import figure_helpers as fh
 from leela_interp.tools.piece_movement_heads import (
@@ -27,92 +27,122 @@ from leela_interp.tools.piece_movement_heads import (
 )
 from scipy.stats import binned_statistic
 from tqdm import tqdm
+from leela_interp.core.general_study import GeneralStudy
 
-class DoubleBranchStudy(EffectStudy):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.check_double_branch()
+class DoubleBranchStudy(GeneralStudy):
+    def __init__(self, *args, load_sets=True, load_all=True, **kwargs):
+        super().__init__(*args, **kwargs, load_all=load_all)
+        if load_all:
+            self.check_contains_double_branch()
+        if load_sets:
+            self.load_puzzle_sets()
+            self.load_effect_sets()
+            self.load_attention_sets()
 
-    def check_double_branch(self):
+    def check_contains_double_branch(self):
         # Check if "branch_1" and "branch_2" columns exist in self.puzzles
         required_columns = ["branch_1", "branch_2"]
         missing_columns = [col for col in required_columns if col not in self.puzzles.columns]
         
         if missing_columns:
             raise ValueError(f"The following required columns are missing from self.puzzles: {', '.join(missing_columns)}")
-        
 
-    def load_alt_puzzles(self):
+    @staticmethod
+    def check_if_double_branch(model, puzzles_original, must_include_pv=True, end: int = 3, min_prob: float | list[float] = 0.1):
 
-        diff_puzzles = self.puzzles.copy()
-
-        print(f"Puzzles: {self.puzzles.shape[0]}")
-
-        diff_puzzles = diff_puzzles[diff_puzzles["principal_variation"].apply(lambda x: len(x)) == 3]
-        print(f"Puzzles with 3 moves in principal variation: {diff_puzzles.shape[0]}")
-
-        diff_puzzles = diff_puzzles[diff_puzzles.principal_variation.apply(lambda x: x[0][2:4] != x[2][2:4])]
-        print(f"Puzzles with different start and end squares in principal variation: {diff_puzzles.shape[0]}")
-
-        # diff_puzzles = diff_puzzles[diff_puzzles["full_pv_probs"].apply(lambda x: 0.3 <= x[0] <= 0.5)]
-        # print(f"Puzzles with full PV probabilities between 0.4 and 0.6: {diff_puzzles.shape[0]}")
-
-        diff_puzzles = diff_puzzles[diff_puzzles["Themes"].apply(lambda x: "mateIn2" in x)]
-        print(f"Puzzles that are mate in 2: {diff_puzzles.shape[0]}")
+        puzzles = puzzles_original.copy()
 
         data = []
-        for _, x in tqdm(diff_puzzles.iterrows(), total=len(diff_puzzles), desc="Checking double games"):
-            data.append(check_if_double_game(self.model, x))
-        self.alt_puzzle_movesets = [x for x in data if x]
+        for _, x in tqdm(puzzles.iterrows(), total=len(puzzles), desc="Checking double games"):
+            data.append(check_if_double_game_fast(model, x, end=end, min_prob=min_prob))
+        alt_puzzle_movesets = [x for x in data if x]
         mask = np.array([bool(x) for x in data])
-        diff_puzzles = diff_puzzles[mask]
-        print(f"Puzzles that are double games: {diff_puzzles.shape[0]}")
+        puzzles = puzzles[mask]
+        print(f"Puzzles that are double games: {puzzles.shape[0]}")
 
-        #print(self.alt_puzzle_movesets)
+        #print(alt_puzzle_movesets)
+
+        def get_moves_probs(depth, end, moves, is_branch_1, branch_1_moves, branch_1_probs, branch_2_moves, branch_2_probs):
+
+            if depth == end:
+                return
+
+            for key, value in moves.items():
+                if key == 'prob':
+                    if is_branch_1:
+                        branch_1_probs.append(value)
+                    else:
+                        branch_2_probs.append(value)
+                    continue
+                elif is_branch_1:
+                    branch_1_moves.append(key)
+                else:
+                    branch_2_moves.append(key)
+
+                get_moves_probs(depth+1, end, value, is_branch_1, branch_1_moves, branch_1_probs, branch_2_moves, branch_2_probs)
 
         main_moves = []
-        for correct_moves, total_moveset in self.alt_puzzle_movesets:
+        main_probs = []
+        has_pv = np.empty(len(alt_puzzle_movesets), dtype=bool)
+        has_pv[:] = True
+        for i, (correct_moves, total_moveset) in enumerate(alt_puzzle_movesets):
             zeroth_move = list(total_moveset)[0]
             first_round_moves = total_moveset[zeroth_move]
+            pv_length = len(correct_moves[1:])
             
-            correct_branch, incorrect_branch = [], []
+            branch_1_moves, branch_2_moves = [], []
+            branch_1_probs, branch_2_probs = [], []
             for first_move, second_round_moves in first_round_moves.items():
                 if first_move == 'prob':
                     continue
-                elif first_move == correct_moves[1]:
-                    correct_branch.append(first_move)
-                    is_correct = True
+                elif branch_1_moves == []:
+                    branch_1_moves.append(first_move)
+                    is_branch_1 = True
                 else:
-                    incorrect_branch.append(first_move)
-                    is_correct = False
+                    branch_2_moves.append(first_move)
+                    is_branch_1 = False
 
-                for second_move, third_round_moves in second_round_moves.items():
-                    if second_move == 'prob':
-                        continue
-                    elif is_correct:
-                        correct_branch.append(second_move)
-                    else:
-                        incorrect_branch.append(second_move)
+                get_moves_probs(0, pv_length, second_round_moves, is_branch_1, branch_1_moves, branch_1_probs, branch_2_moves, branch_2_probs)
 
-                    for third_move, fourth_round_moves in third_round_moves.items():
-                        if third_move == 'prob':
-                            continue
-                        elif is_correct:
-                            correct_branch.append(third_move)
-                        else:
-                            incorrect_branch.append(third_move)
+            #print(branch_1_moves, branch_2_moves)
+            if must_include_pv:
+                if not (correct_moves[1:] in [branch_1_moves, branch_2_moves]):
+                    has_pv[i] = False
+                    continue
 
-            main_moves.append([correct_branch, incorrect_branch])
+            main_moves.append([branch_1_moves, branch_2_moves])
+            main_probs.append([branch_1_probs, branch_2_probs])
 
+        #print(main_moves)
+        puzzles = puzzles[has_pv]
+        print(f"Puzzles with PV: {puzzles.shape[0]}")
+
+        puzzles["branch_1"] = [main_moves[i][0] for i in range(len(main_moves))]
+        puzzles["branch_2"] = [main_moves[i][1] for i in range(len(main_moves))]
+        puzzles["branch_1_probs"] = [main_probs[i][0] for i in range(len(main_probs))]
+        puzzles["branch_2_probs"] = [main_probs[i][1] for i in range(len(main_probs))]
+        
         mask = np.array([len(set([b1[0][2:4], b1[2][2:4], b2[0][2:4], b2[2][2:4]])) == 4 for b1, b2 in main_moves])
-        diff_puzzles = diff_puzzles[mask]
-        print(f"Puzzles with 4 distinct moves: {diff_puzzles.shape[0]}")
+        puzzles = puzzles[mask]
+        print(f"Puzzles with 4 distinct moves: {puzzles.shape[0]}")
         
-        self.main_moves = [main_moves[i] for i in np.where(mask)[0]]
-        
-        self.alt_puzzles = diff_puzzles
-        self.alt_mask = self.puzzles.index.isin(self.alt_puzzles.index)
+        return puzzles
 
+    def find_result_sets(self, include_starting=False, n_examples=100):
+        all_results = DoubleBranchStudy.get_possibility_indices(self.puzzles, include_starting=include_starting)
+        result_sets = {k: v for k, v in all_results.items() if len(v) >= n_examples}
+        result_sets = {k: v for k, v in sorted(result_sets.items(), key=lambda item: len(item[1]), reverse=True)}
+        result_masks = np.zeros((len(result_sets), len(self.puzzles)), dtype=bool)
+        for i, (_, idx_list) in enumerate(result_sets.items()):
+            result_masks[i, idx_list] = True
+        self.result_sets = result_sets
+        self.result_masks = result_masks
+        self.include_starting = include_starting
+        self.n_examples = n_examples
+    
+    def export_puzzle_set_info(self, tag='b'):
+        super().export_puzzle_set_info(tag=tag)
+        
 
     def load_results(self):
         if self.alt_puzzles is not None:
@@ -126,313 +156,177 @@ class DoubleBranchStudy(EffectStudy):
         for i, (_, idx_list) in enumerate(self.good_results.items()):
             self.good_mask[i, idx_list] = True
 
-    def export_puzzles(self, filename):
-        with open(f"interesting_puzzles_{filename}.pkl", "wb") as f:
-            pickle.dump(self.puzzles.iloc[self.good_results[filename]], f)
+    @staticmethod
+    def map_to_possibility(branch_1_squares, branch_2_squares):
+        mapping = {}
+        result = []
+        counter = 1
 
-    def get_effects_data(self, mask=None, allowed_lengths=list(range(3, 17)), rating_range=(0, 5000), verbose=False):
-        include_starting = self.include_starting
-        include_alt = self.alt_puzzles is not None
-        apply_mask = self.apply_mask
-        if mask is None:
-            mask = np.ones(len(self.puzzles), dtype=bool)
+        for square in branch_1_squares:
+            if square not in mapping:
+                mapping[square] = str(counter)  
+                counter += 1
+            result.append(mapping[square])
+        for square in branch_2_squares:
+            if square not in mapping:
+                mapping[square] = str(counter)
+                counter += 1
+            result.append(mapping[square])
 
-        effects = self.all_effects[mask]
+        return result
+
+    @staticmethod
+    def get_possibility_indices(puzzles, include_starting=False):
+        if include_starting:
+            raise NotImplementedError("Include starting not implemented")
+
+        possibilities = []
+        indices = {}
+
+        for i, (idx, puzzle) in enumerate(puzzles.iterrows()):
+            branch_1_moves = puzzle.branch_1
+            branch_2_moves = puzzle.branch_2
+            branch_1_squares = [move[2:4] for move in branch_1_moves]
+            branch_2_squares = [move[2:4] for move in branch_2_moves]
+            possibility = ''.join(DoubleBranchStudy.map_to_possibility(branch_1_squares, branch_2_squares))
+            if possibility not in indices:
+                indices[possibility] = []
+            indices[possibility].append(i)
+            possibilities.append(possibility)
+        
+        return indices
+    
+    def get_effect_set_data(self, tag, possibility, verbose=False):
+        effects = self.effect_sets[tag][possibility]
+        include_branch = tag == "b"
+        max_length = len(possibility) // (2 if include_branch else 1)
 
         candidate_effects = []
-        follow_up_effects = {}
-        max_length = max(allowed_lengths)
-        for j in range(2, max_length + 1):
-            follow_up_effects[j] = []
-        if include_starting:
-            starting_effects = {}
-            for j in range(1, max_length + 1):
-                starting_effects[j] = []
-        if include_alt:
-            alt_effects = {}
-            for j in range(1, max_length + 1):
-                alt_effects[j] = []
-        intersection_skips = 0
+        follow_up_effects = {j: [] for j in range(2, max_length + 1)}
+        starting_effects = {j: [] for j in range(1, max_length + 1)} if include_branch else {}
+        
         patching_square_effects = []
         other_effects = []
         skipped = []
         non_skipped = []
 
-        for i, (idx, puzzle) in enumerate(self.puzzles[mask].iterrows()):
-            # Should never happen on hard puzzles
-            #print(i, len(self.main_moves))
-            # Get position of idx in self.alt_puzzles
-            if self.alt_puzzles is not None:
-                k = np.where(self.alt_puzzles.index == idx)[0][0]
-                pv = self.main_moves[k][0]
-                av = self.main_moves[k][1]
-            else:
-                pv = puzzle.principal_variation
-                av = []
-            #print(i, pv, av)
-            if len(pv) not in allowed_lengths:# or "mateIn3" not in puzzle["Themes"]:
-                skipped.append(idx)
-                continue
-            if not (rating_range[0] <= puzzle["Rating"] <= rating_range[1]):
-                skipped.append(idx)
-                continue
-            # if puzzle.sparring_full_pv_probs[1] < 0.5:
-            #     skipped.append(idx)
-            #     continue
+        for i, (idx, puzzle) in enumerate(self.puzzle_sets[tag][possibility].iterrows()):
             board = LeelaBoard.from_puzzle(puzzle)
             corrupted_board = LeelaBoard.from_fen(puzzle.corrupted_fen)
+            pv = puzzle.branch_1
+            pv_2 = puzzle.branch_2
 
-            # Figure out which square(s) differ in the corrupted position
-            patching_squares = []
-            for square in chess.SQUARES:
-                if board.pc_board.piece_at(square) != corrupted_board.pc_board.piece_at(
-                    square
-                ):
-                    patching_squares.append(chess.SQUARE_NAMES[square])
-
+            patching_squares = self.get_patching_squares(board, corrupted_board)
             movs = [pv[j][2:4] for j in range(len(pv))]
-            if include_starting:
-                starts = [pv[j][0:2] for j in range(len(pv))]
-            if include_alt:
-                alt_moves = [av[j][2:4] for j in range(len(av))]
-            if not apply_mask:
-                if movs[0] == movs[2]:
-                    skipped.append(idx)
-                    continue
+            starts = [pv_2[j][2:4] for j in range(len(pv_2))] if include_branch else []
 
             candidate_squares = [movs[0]]
-            follow_up_squares = {}
-            for j in range(2, max_length + 1):
-                follow_up_squares[j] = [movs[j-1]] if len(movs) >= j and ((movs[j-1] not in movs[:j-1]) or apply_mask) else []
-                #follow_up_squares[j] = [movs[j-1]] if len(movs) >= j and movs[j-1] not in (movs[:j-1]+movs[j:]) else []
+            follow_up_squares = {j: [movs[j-1]] for j in range(2, max_length + 1)}
+            starting_squares = {j: [starts[j-1]] for j in range(1, max_length + 1)} if include_branch else {}
 
-            if include_starting:
-                starting_squares = {}
-                for j in range(1, max_length + 1):
-                    starting_squares[j] = [starts[j-1]] if len(starts) >= j and ((starts[j-1] not in starts[:j-1] + movs) or apply_mask) else []
-
-            if include_alt:
-                alt_squares = {}
-                for j in range(1, max_length + 1):
-                    alt_squares[j] = [alt_moves[j-1]] if len(alt_moves) >= j and ((alt_moves[j-1] not in alt_moves[:j-1]) or apply_mask) else []
-
-            if set(patching_squares).intersection(set(movs + (starts if include_starting else []) + (alt_moves if include_alt else []))):
+            if self.should_skip(patching_squares, movs, starts):
                 skipped.append(idx)
-                intersection_skips += 1
                 continue
 
             non_skipped.append(idx)
-            candidate_effects.append(
-                effects[i, :, [board.sq2idx(square) for square in candidate_squares]]
-                .amax(-1)
-                .cpu()
-                .numpy()
-            )
-            for j in range(2, max_length + 1):
-                if len(follow_up_squares[j]) > 0:
-                    follow_up_effects[j].append(
-                        effects[i, :, [board.sq2idx(square) for square in follow_up_squares[j]]]
-                        .amax(-1)
-                        .cpu()
-                        .numpy()
-                    )
-            if include_starting:
-                for j in range(1, max_length + 1):
-                    if len(starting_squares[j]) > 0:
-                        starting_effects[j].append(
-                                effects[i, :, [board.sq2idx(square) for square in starting_squares[j]]]
-                                .amax(-1)
-                                .cpu()
-                                .numpy()
-                            )
-            if include_alt:
-                for j in range(1, max_length + 1):
-                    if len(alt_squares[j]) > 0:
-                        alt_effects[j].append(
-                            effects[i, :, [board.sq2idx(square) for square in alt_squares[j]]]
-                            .amax(-1)
-                            .cpu()
-                            .numpy()
-                        )
-            patching_square_effects.append(
-                effects[i, :, [board.sq2idx(square) for square in patching_squares]]
-                .amax(-1)
-                .cpu()
-                .numpy()
-            )
-            if include_starting:
-                covered_squares = set(candidate_squares + patching_squares + 
-                                    sum([starting_squares[j] for j in range(1, max_length + 1)], []) +
-                                    sum([follow_up_squares[j] for j in range(2, max_length + 1)], []))
-            elif include_alt:
-                covered_squares = set(candidate_squares + patching_squares + 
-                                    sum([alt_squares[j] for j in range(1, max_length + 1)], []) +
-                                    sum([follow_up_squares[j] for j in range(2, max_length + 1)], []))
-            else:
-                covered_squares = set(candidate_squares + patching_squares + sum([follow_up_squares[j] for j in range(2, max_length + 1)], []))
-            other_effects.append(
-                effects[
-                    i,
-                    :,
-                    [idx for idx in range(64) if board.idx2sq(idx) not in covered_squares],
-                ]
-                .amax(-1)
-                .cpu()
-                .numpy()
-            )
+            self.process_effects(effects[i], board, candidate_squares, follow_up_squares, starting_squares, 
+                                 patching_squares, candidate_effects, follow_up_effects, starting_effects, 
+                                 patching_square_effects, other_effects, include_branch)
 
         if verbose:
-            print(
-                f"Skipped {len(skipped)} out of {mask.sum()} puzzles ({len(skipped)/mask.sum():.2%})"
-            )
-            print(f"Intersection skips: {intersection_skips} out of {mask.sum()} puzzles ({intersection_skips/mask.sum():.2%})")
+            self.print_verbose_info(len(skipped), len(self.puzzle_sets[tag][possibility]))
 
+        return self.prepare_effects_data(candidate_effects, follow_up_effects, starting_effects, 
+                                         patching_square_effects, other_effects, max_length, 
+                                         include_branch, verbose), non_skipped
+
+    def prepare_effects_data(self, candidate_effects, follow_up_effects, starting_effects, 
+                             patching_square_effects, other_effects, max_length, include_starting, verbose):
         candidate_effects = np.stack(candidate_effects)
-        for j in range(2, max_length + 1):
-            if len(follow_up_effects[j]) > 0:
-                follow_up_effects[j] = np.stack(follow_up_effects[j])
+        follow_up_effects = {j: np.stack(effects) if effects else np.array([]) for j, effects in follow_up_effects.items()}
         if include_starting:
-            for j in range(1, max_length + 1):
-                if len(starting_effects[j]) > 0:
-                    starting_effects[j] = np.stack(starting_effects[j])
-        if include_alt:
-            for j in range(1, max_length + 1):
-                if len(alt_effects[j]) > 0:
-                    alt_effects[j] = np.stack(alt_effects[j])
+            starting_effects = {j: np.stack(effects) if effects else np.array([]) for j, effects in starting_effects.items()}
         patching_square_effects = np.stack(patching_square_effects)
         other_effects = np.stack(other_effects)
+
         if verbose:
             print(f"Patching: {len(patching_square_effects)}, Other: {len(other_effects)}")
-
-        def print_effects(effects_dict, prefix):
-            print(f"{prefix}::", end=" ")
-            for i in range(1, max_length + 1):
-                if i in effects_dict:
-                    suffix = "st" if i == 1 else "nd" if i == 2 else "rd" if i == 3 else "th"
-                    print(f"{i}{suffix}: {len(effects_dict[i])}", end=", ")
-            print()
-
-        if verbose:
-            print_effects({1: candidate_effects, **{i: follow_up_effects[i] for i in range(2, max_length + 1)}}, "End square")
+            self.print_effects({1: candidate_effects, **follow_up_effects}, "End square")
             if include_starting:
-                print_effects(starting_effects, "Start square")
-            if include_alt:
-                print_effects(alt_effects, "Alt square")
+                self.print_effects(starting_effects, "B square")
 
-        # Define lists for effects and their configurations
         effects_data = [
-            {"effects": patching_square_effects, "name": "Patched"},
+            {"effects": patching_square_effects, "name": "Corrupted"},
             {"effects": other_effects, "name": "Other"},
-            {"effects": candidate_effects, "name": "1"},
+            {"effects": candidate_effects, "name": "Move 1"},
         ]
-        for j in range(2, max_length + 1):
-            effects_data.append({"effects": follow_up_effects[j], "name": f"{j}"})
+        effects_data.extend({"effects": effects, "name": f"Move {j}"} for j, effects in follow_up_effects.items())
         if include_starting:
-            for j in range(1, max_length + 1):
-                effects_data.append({"effects": starting_effects[j], "name": f"{j}S"})
-        if include_alt:
-            for j in range(1, max_length + 1):
-                effects_data.append({"effects": alt_effects[j], "name": f"{j}A"})
-        return effects_data, non_skipped
-
-    def plot_rating_histogram(self, filename=None):
-
-        fig = plt.figure()
-        plt.hist(self.puzzle_ratings, bins=30)
-        plt.xlabel("Rating")
-        plt.ylabel("Frequency")
-        plt.title("Histogram of Puzzle Ratings")
-        plt.show()
+            effects_data.extend({"effects": effects, "name": f"Move {j}B"} for j, effects in starting_effects.items())
         
-        if filename is not None:
-            fh.save(filename, fig)
+        return effects_data
 
-    def plot_examples(self, mask=None, n=5):
-        if mask is None:
-            mask = np.ones(len(self.puzzles), dtype=bool)
+    def plot_residual_effects(self, tag, possibility, filename=None, plot_ci=True, ax=None, row_col=None, log=False, clean_plot=False):
+        ax_init = None if ax is None else ax
 
-        effects = self.all_effects[mask]
+        branch_1_probs = np.vstack(self.puzzle_sets[tag][possibility].branch_1_probs.to_numpy())
+        branch_2_probs = np.vstack(self.puzzle_sets[tag][possibility].branch_2_probs.to_numpy())
+        branch_probs = np.vstack((branch_1_probs[:, 0], branch_2_probs[:, 0])).T
+        sorted_indices = np.argsort(branch_probs[:, 0] - branch_probs[:, 1])
 
-        plots = []
-
-        # Don't plot all the layers, it's too much
-        layers = [0, 6, 8, 10, 12, 14]
-
-        for i in range(n):
-            puzzle = self.puzzles[mask].iloc[i]
-            # if "mateIn3" not in puzzle["Themes"]:
-            #     continue
-            # else:
-            print(i, puzzle.principal_variation, puzzle.full_pv_probs)
-            #print(i, puzzle.full_model_moves, puzzle.sparring_full_pv_probs)
-            board = LeelaBoard.from_puzzle(puzzle)
-            colormap_values, mappable = palette(
-                effects[i][layers].cpu().numpy().ravel(),
-                cmap="bwr",
-                zero_center=True,
-            )
-            colormap_values = [
-                colormap_values[j : j + 64] for j in range(0, 64 * len(layers), 64)
-            ]
-            new_plots = []
-            for j, layer in enumerate(layers):
-                max_effect_idx = effects[i, layer].abs().argmax()
-                max_effect = effects[i, layer, max_effect_idx].item()
-                new_plots.append(
-                    board.plot(
-                        heatmap=colormap_values[j],
-                        caption=f"L{layer}, max log odds reduction: {max_effect:.2f}",
-                    )
-                )
-
-            plots.append(ice.Arrange(new_plots, gap=10))
-
-        return ice.Arrange(plots, gap=10, arrange_direction=ice.Arrange.Direction.VERTICAL)
-
-    def plot_residual_effects(self, mask=None, save_path=None, allowed_lengths=[3, 4, 5, 6, 7], apply_mask=True, rating_range=(0, 3000), plot_ci=True, ax=None, row_col=None, log=False):
-        if mask is None:
-            mask = np.ones(len(self.puzzles), dtype=bool)
-
-        effects_data, _ = self.get_effects_data(mask, allowed_lengths, rating_range)
+        effects_data, nonskipped = self.get_effect_set_data(tag, possibility)
+        # Find the new indices corresponding to sorted_indices in the nonskipped subset
+        nonskipped_indices = [self.puzzle_sets[tag][possibility].index.get_loc(idx) for idx in nonskipped]
+        #print(sorted_indices, nonskipped_indices)
+        new_sorted_indices = []
+        for idx in sorted_indices:
+            if idx in nonskipped_indices:
+                new_idx = nonskipped_indices.index(idx)
+                new_sorted_indices.append(new_idx)
+        
+        # Use new_sorted_indices instead of sorted_indices for indexing effects
+        sorted_indices = new_sorted_indices[:10]
+        #print(sorted_indices)
+        max_length = len(possibility) // (2 if tag != "n" else 1)
 
         fh.set()
 
-        line_styles = ["-"] * 2 + ["-", "--"] * ((allowed_lengths[-1] - 1) // 2) + ["-"]
+        line_styles = ["-"] * 2 + ["-", "--"] * ((max_length - 1) // 2) + ["-"]
 
         colors = plt.cm.tab20(np.linspace(0, 1, 20)).tolist()[:len(line_styles)]
         layers = list(range(15))
 
-        if self.alt_puzzles is not None:
-            line_styles += ["-", "--"] * ((allowed_lengths[-1] - 1) // 2) + ["-"]
-            colors += plt.cm.tab20(np.linspace(0, 1, 20)).tolist()[len(line_styles) - len(colors) + 5:]
-        else:
-            line_styles += ["-.", ":"] * ((allowed_lengths[-1] - 1) // 2) + ["-."]
-            colors += plt.cm.tab20(np.linspace(0, 1, 20)).tolist()[:len(line_styles) - len(colors)]
+        line_styles += ["-", "--"] * ((max_length - 1) // 2) + ["-"]
+        colors += plt.cm.tab20(np.linspace(0, 1, 20)).tolist()[len(line_styles) - len(colors) + 5:]
+        #line_styles += ["-.", ":"] * ((max_length - 1) // 2) + ["-."]
+        #colors += plt.cm.tab20(np.linspace(0, 1, 20)).tolist()[:len(line_styles) - len(colors)]
 
         # Create plots using matplotlib
         if ax is None:
             fig, ax = plt.subplots()
-            fig.set_figwidth(10)
-            fig.set_figheight(5)
-
-        #print(len(line_styles), len(effects_data))
+            if not clean_plot:
+                fig.set_figwidth(6)
+                fig.set_figheight(4)
+            else:
+                fig.set_figwidth(3)
+                fig.set_figheight(2)
 
         for i, effect_data in enumerate(effects_data):
-            effects = effect_data["effects"]
+            if "B" in effect_data["name"]:
+                effects = effect_data["effects"]
+                len_effects = len(effects)
+                effects = effects[sorted_indices]
+            else:
+                effects = effect_data["effects"]
+                len_effects = len(effects)
+                effects = effects[sorted_indices]
+            #effects = np.abs(effect_data["effects"])[sorted_indices]
+            if i==0:    
+                print(possibility, len_effects, len(effects))
             if len(effects) == 0:
                 continue
             
-            if self.alt_puzzles is not None:
-                effects = np.abs(effects)
-                #pass
             mean_effects = np.mean(effects, axis=0)
-            
-            # Calculate confidence intervals
-            if plot_ci:
-                ci_50 = np.quantile(effects, [0.25, 0.75], axis=0)
-                ci_70 = np.quantile(effects, [0.15, 0.85], axis=0)
-                ci_90 = np.quantile(effects, [0.05, 0.95], axis=0)
-                ci_100 = np.quantile(effects, [0, 1], axis=0)
 
             ax.plot(
                 layers,
@@ -443,13 +337,16 @@ class DoubleBranchStudy(EffectStudy):
                 linewidth= 3 * fh.LINE_WIDTH,
             )
             if plot_ci:
-                ax.fill_between(
-                    layers,
-                    ci_90[0],
-                    ci_90[1],
-                    color=colors[i],
-                    alpha=0.1,
-                )
+                ci_50 = np.quantile(effects, [0.25, 0.75], axis=0)
+                ci_90 = np.quantile(effects, [0.05, 0.95], axis=0)
+                if not clean_plot:
+                    ax.fill_between(
+                        layers,
+                        ci_90[0],
+                        ci_90[1],
+                        color=colors[i],
+                        alpha=0.1,
+                    )
                 ax.fill_between(
                     layers,
                     ci_50[0],
@@ -470,8 +367,8 @@ class DoubleBranchStudy(EffectStudy):
             ax.set_ylabel("Log odds reduction")
         _, y_max = ax.get_ylim()
         ax.set_xlim(0, 14)
-        #ax.set_ylim(1e-2, 8)
-        ax.set_ylim(-8, 8)
+        #ax.set_ylim(1e-2, 2)
+        ax.set_ylim(-2, 2)
         if log:
             ax.set_yscale("symlog", linthresh=1e-2)
         if row_col is not None:
@@ -481,393 +378,50 @@ class DoubleBranchStudy(EffectStudy):
         ax.spines[["right", "top", "left"]].set_visible(False)
         ax.set_facecolor(fh.PLOT_FACE_COLOR)
 
-        if save_path is not None:
-            fh.save(save_path, fig)
+        if filename is not None and ax_init is None:
+            fh.save('figures/' + filename, fig)
 
         if ax is None:
             plt.show()
 
-    def allowed_possibilities_mask(self, allowed_lengths=[3, 4, 5, 6, 7]):
-        mask = np.zeros(len(self.good_results), dtype=bool)
-        for idx, possibility in enumerate(self.good_results):
-            n_moves = len(possibility) // (2 if self.include_starting or self.alt_puzzles is not None else 1)
-            if n_moves in allowed_lengths:
-                mask[idx] = True
-        return mask
-
-    def plot_residual_effects_grid(self, n_cols=4, allowed_lengths=[3, 4, 5, 6, 7], rating_range=(0, 5000), filename=None, log=False):
-        possibilities_mask = self.allowed_possibilities_mask(allowed_lengths)
-        n_plots = np.sum(possibilities_mask)
+    def plot_residual_effects_grid(self, tag, possibilities, n_cols=4, filename=None, log=False):
+        n_plots = len(possibilities)
         n_rows = math.ceil(n_plots / n_cols)
-        #print(n_plots, n_rows, n_cols)
         
         fig, axes = plt.subplots(n_rows, n_cols, figsize=(3*n_cols, 2*n_rows), sharex=True, sharey=True)
-        #fig.suptitle("Residual Effects Grid", fontsize=16)
         
-        masked_good_results = [good_result for good_result, possibility_mask in zip(self.good_results, possibilities_mask) if possibility_mask]
-        if self.alt_puzzles is not None:
-            masked_good_mask = [good_mask & self.alt_mask for good_mask, possibility_mask in zip(self.good_mask, possibilities_mask) if possibility_mask]
-        else:
-            masked_good_mask = [good_mask for good_mask, possibility_mask in zip(self.good_mask, possibilities_mask) if possibility_mask]
-        for idx, (possibility, mask) in enumerate(zip(masked_good_results, masked_good_mask)):
+        for idx, possibility in enumerate(possibilities):
             row = idx // n_cols
             col = idx % n_cols
             ax = axes[row, col] if n_rows > 1 else axes[col]
-            
-            print(sum(mask))
             try:
                 self.plot_residual_effects(
-                    mask=mask, 
-                    allowed_lengths=allowed_lengths, 
-                    rating_range=rating_range,
+                    tag=tag,
+                    possibility=possibility,
                     ax=ax,
-                    row_col=(True if row == n_rows - 1 else False, True if col == 0 else False, possibility),
+                    row_col=(row == n_rows - 1, col == 0, possibility),
                     plot_ci=True,
-                    save_path=None,
+                    filename=None,
                     log=log
                 )
             except ValueError:
                 ax.set_visible(False)
         
-        # Hide any unused subplots
         for idx in range(n_plots, n_rows * n_cols):
             row = idx // n_cols
             col = idx % n_cols
-            axes[row, col].set_visible(False)
+            if n_rows > 1:
+                axes[row, col].set_visible(False)
+            else:
+                axes[col].set_visible(False)
         
         plt.tight_layout()
         plt.show()
 
         if filename is not None:
-            fh.save(filename, fig)
-        
+            fh.save('figures/' + filename, fig)
 
-    def plot_rating(self, mask=None, save_path=None, allowed_lengths=[3, 4, 5, 6, 7]):
-        if mask is None:
-            mask = np.ones(len(self.puzzles), dtype=bool)
-
-        effects_data, non_skipped = self.get_effects_data(mask, allowed_lengths)
-        relevant_ratings = self.puzzles.loc[non_skipped, "Rating"]
-
-        fh.set()
-
-        colors = plt.cm.tab20(np.linspace(0, 1, 20)).tolist()
-        layers = list(range(15))
-
-        # Create plots using matplotlib
-        fig, ax = plt.subplots()
-        fig.set_figwidth(10)
-        fig.set_figheight(5)
-
-        line_styles = ["-"] * 2 + ["-", "--"] * ((allowed_lengths[-1] - 1) // 2) + ["-"]
-        line_styles += ["-.", ":"] * ((allowed_lengths[-1] - 1) // 2)
-
-        for i, effect_data in enumerate(effects_data):
-            effects = effect_data["effects"]
-            if len(effects) == 0:
-                continue
-
-            # Group the ratings into bins and calculate the average and std per bin
-            bin_means, bin_edges, binnumber = binned_statistic(
-                relevant_ratings, np.max(effects, axis=1), statistic='mean', bins=10
-            )
-            bin_std, _, _ = binned_statistic(
-                relevant_ratings, np.max(effects, axis=1), statistic='std', bins=10
-            )
-            
-            bin_centers = 0.5 * (bin_edges[1:] + bin_edges[:-1])
-            
-            ax.errorbar(
-                bin_centers,
-                bin_means,
-                yerr=bin_std,
-                label=effect_data["name"],
-                fmt='o-',
-                color=colors[i]
-            )
-
-        # ax.set_title("Patching effects on different squares by layer")
-        ax.set_xlabel("Rating")
-        ax.set_ylabel("Log odds reduction of correct move")
-        _, y_max = ax.get_ylim()
-        #ax.set_ylim(1e-2, 8)
-        #ax.set_yscale("log")
-        ax.legend(loc="upper right")
-        ax.spines[["right", "top", "left"]].set_visible(False)
-        ax.set_facecolor(fh.PLOT_FACE_COLOR)
-
-        if save_path is not None:
-            fh.save(save_path, fig)
-
-        plt.show()
-
-    def plot_rating_layer(self, mask=None, save_path=None, allowed_lengths=[3, 4, 5, 6, 7]):
-        if mask is None:
-            mask = np.ones(len(self.puzzles), dtype=bool)
-
-        effects_data, non_skipped = self.get_effects_data(mask, allowed_lengths)
-        relevant_ratings = self.puzzles.loc[non_skipped, "Rating"]
-
-        fh.set()
-
-        colors = plt.cm.tab20(np.linspace(0, 1, 20)).tolist()
-        layers = list(range(15))
-
-        fig, ax = plt.subplots()
-        fig.set_figwidth(10)
-        fig.set_figheight(5)
-
-        line_styles = ["-"] * 2 + ["-", "--"] * ((allowed_lengths[-1] - 1) // 2) + ["-"]
-        line_styles += ["-.", ":"] * ((allowed_lengths[-1] - 1) // 2)
-
-        for i, effect_data in enumerate(effects_data):
-            effects = effect_data["effects"]
-            if len(effects) == 0:
-                continue
-            
-            #mean_effects = np.mean(effects, axis=0)
-            #print(effects.shape, relevant_ratings.shape)
-
-            # Group the ratings into bins and calculate the average and std per bin
-            bin_means, bin_edges, binnumber = binned_statistic(
-                relevant_ratings, np.argmax(effects, axis=1), statistic='mean', bins=10
-            )
-            bin_std, _, _ = binned_statistic(
-                relevant_ratings, np.argmax(effects, axis=1), statistic='std', bins=10
-            )
-            
-            bin_centers = 0.5 * (bin_edges[1:] + bin_edges[:-1])
-            
-            ax.errorbar(
-                bin_centers,
-                bin_means,
-                yerr=bin_std,
-                label=effect_data["name"],
-                fmt='o-',
-                color=colors[i]
-            )
-
-        # ax.set_title("Patching effects on different squares by layer")
-        ax.set_xlabel("Rating")
-        ax.set_ylabel("Layer")
-        _, y_max = ax.get_ylim()
-        #ax.set_ylim(1e-2, 8)
-        #ax.set_yscale("log")
-        ax.legend(loc="upper right")
-        ax.spines[["right", "top", "left"]].set_visible(False)
-        ax.set_facecolor(fh.PLOT_FACE_COLOR)
-
-        if save_path is not None:
-            fh.save(save_path, fig)
-
-        plt.show()
-
-    def plot_rating_grid(self, n_cols=4, allowed_lengths=[3, 4, 5, 6, 7], filename=None):
-        n_plots = len(self.good_results)
-        n_rows = (n_plots + n_cols - 1) // n_cols
-
-        fig, axes = plt.subplots(n_rows, n_cols, figsize=(2*n_cols, 2*n_rows), squeeze=True, sharex=True, sharey=True)
-        
-        for idx, (possibility, mask) in enumerate(zip(list(self.good_results), self.good_mask)):
-            row = idx // n_cols
-            col = idx % n_cols
-            ax = axes[row, col]
-            
-            effects_data, non_skipped = self.get_effects_data(mask, allowed_lengths)
-            relevant_ratings = self.puzzles.loc[non_skipped, "Rating"]
-
-            colors = plt.cm.tab20(np.linspace(0, 1, 20)).tolist()
-            
-            for i, effect_data in enumerate(effects_data):
-                effects = effect_data["effects"]
-                if len(effects) == 0:
-                    continue
-
-                bin_means, bin_edges, _ = binned_statistic(
-                    relevant_ratings, np.max(effects, axis=1), statistic='mean', bins=7, range=(700, 2200)
-                )
-                bin_std, _, _ = binned_statistic(
-                    relevant_ratings, np.max(effects, axis=1), statistic='std', bins=7, range=(700, 2200)
-                )
-                
-                bin_centers = 0.5 * (bin_edges[1:] + bin_edges[:-1])
-                
-                # Calculate 50% confidence interval
-                ci_lower = bin_means - 0.67448 * bin_std
-                ci_upper = bin_means + 0.67448 * bin_std
-                
-                ax.plot(bin_centers, bin_means, label=effect_data["name"], color=colors[i])
-                ax.fill_between(bin_centers, ci_lower, ci_upper, alpha=0.3, color=colors[i])
-
-            ax.set_title(f"{possibility}")
-            if col == 0:
-                ax.set_ylabel("Log odds reduction")
-            if row == n_rows - 1:
-                ax.set_xlabel("Rating")
-            ax.legend(fontsize='x-small', loc="upper right")
-            ax.spines[["right", "top"]].set_visible(False)
-
-        # Remove any unused subplots
-        for idx in range(len(self.good_results), n_rows * n_cols):
-            row = idx // n_cols
-            col = idx % n_cols
-            fig.delaxes(axes[row, col])
-
-        plt.tight_layout()
-        plt.show()
-        
-        if filename is not None:
-            fh.save(filename, fig)
-
-    def plot_rating_layer_grid(self, n_cols=4, allowed_lengths=[3, 4, 5, 6, 7], filename=None):
-        n_plots = len(self.good_results)
-        n_rows = (n_plots + n_cols - 1) // n_cols
-
-        fig, axes = plt.subplots(n_rows, n_cols, figsize=(2*n_cols, 2*n_rows), squeeze=True, sharex=True, sharey=True)
-        
-        for idx, (possibility, mask) in enumerate(zip(list(self.good_results), self.good_mask)):
-            row = idx // n_cols
-            col = idx % n_cols
-            ax = axes[row, col]
-            
-            effects_data, non_skipped = self.get_effects_data(mask, allowed_lengths)
-            relevant_ratings = self.puzzles.loc[non_skipped, "Rating"]
-
-            colors = plt.cm.tab20(np.linspace(0, 1, 20)).tolist()
-            
-            for i, effect_data in enumerate(effects_data):
-                effects = effect_data["effects"]
-                if len(effects) == 0:
-                    continue
-
-                bin_means, bin_edges, _ = binned_statistic(
-                    relevant_ratings, np.argmax(effects, axis=1), statistic='mean', bins=7, range=(700, 2200)
-                )
-                bin_std, _, _ = binned_statistic(
-                    relevant_ratings, np.argmax(effects, axis=1), statistic='std', bins=7, range=(700, 2200)
-                )
-                
-                bin_centers = 0.5 * (bin_edges[1:] + bin_edges[:-1])
-                
-                # Calculate 50% confidence interval
-                ci_lower = bin_means - 0.67448 * bin_std
-                ci_upper = bin_means + 0.67448 * bin_std
-                
-                ax.plot(bin_centers, bin_means, label=effect_data["name"], color=colors[i])
-                ax.fill_between(bin_centers, ci_lower, ci_upper, alpha=0.3, color=colors[i])
-
-            ax.set_title(f"{possibility}")
-            if col == 0:
-                ax.set_ylabel("Layer")
-            if row == n_rows - 1:
-                ax.set_xlabel("Rating")
-            ax.legend(fontsize='x-small', loc="upper right")
-            ax.spines[["right", "top"]].set_visible(False)
-
-        # Remove any unused subplots
-        for idx in range(len(self.good_results), n_rows * n_cols):
-            row = idx // n_cols
-            col = idx % n_cols
-            fig.delaxes(axes[row, col])
-
-        plt.tight_layout()
-        plt.show()
-
-        if filename is not None:
-            fh.save(filename, fig)
-
-    def plot_attention_grid(self, allowed_lengths=[3, 4, 5, 6, 7], n_cols=4, vmax=0.5, topk=5, rating_range=None, filename=None):
-
-        if rating_range is not None:
-            rating_mask = np.array((self.puzzles["Rating"] >= rating_range[0]) & (self.puzzles["Rating"] <= rating_range[1]))
-        else:
-            rating_mask = np.ones(len(self.puzzles), dtype=bool)
-
-        # Calculate the number of rows and columns for the grid
-        possibilities_mask = self.allowed_possibilities_mask(allowed_lengths)
-        n_plots = np.sum(possibilities_mask)
-        n_rows = (n_plots + n_cols - 1) // n_cols
-
-        # Create a grid of subplots
-        fig, axes = plt.subplots(n_rows, n_cols, figsize=(2*n_cols, 3*n_rows), sharex=True, sharey=True)
-
-        best_heads = {}
-        self.all_heads = {}
-
-        # Create a matrix to hold the data
-        n_layers = 15
-        n_heads = 24
-        data = np.full((n_heads, n_layers), '', dtype=object)
-
-        # Fill the matrix with values for each piece type
-        for layer, head in knight_heads:
-            data[head, layer] = 'K'
-        for layer, head in bishop_heads:
-            data[head, layer] = 'B'
-        for layer, head in rook_heads:
-            data[head, layer] = 'R'
-
-        masked_good_results = [good_result for good_result, possibility_mask in zip(self.good_results, possibilities_mask) if possibility_mask]
-        if self.alt_puzzles is not None:
-            masked_good_mask = [good_mask & self.alt_mask for good_mask, possibility_mask in zip(self.good_mask, possibilities_mask) if possibility_mask]
-        else:
-            masked_good_mask = [good_mask for good_mask, possibility_mask in zip(self.good_mask, possibilities_mask) if possibility_mask]
-        
-        for idx, (possibility, mask) in enumerate(zip(masked_good_results, masked_good_mask)):
-            row = idx // n_cols
-            col = idx % n_cols
-            ax = axes[row, col] if n_rows > 1 else axes[col]
-
-            if mask is None:
-                mask = np.ones(len(self.all_attentions), dtype=bool)
-            #print(mask)
-            #print(rating_mask)
-            mask = mask & rating_mask
-
-            effects = self.all_attentions[mask]
-            #print(possibility, np.sum(mask))
-
-            mean_effects = -effects.mean(dim=0).cpu().numpy()
-            #mean_effects = np.abs(effects.cpu().numpy()).mean(axis=0)
-            if np.sum(mask) >= self.n_examples:
-                self.all_heads[possibility] = mean_effects
-
-            # Find the 5 most important heads
-            flat_indices = np.argsort(mean_effects.flatten())[-topk:][::-1]
-            top_5_heads = [((idx // mean_effects.shape[1], idx % mean_effects.shape[1]), mean_effects.flatten()[idx]) for idx in flat_indices]
-            best_heads[possibility] = top_5_heads
-
-            try:
-                sns.heatmap(mean_effects.T, cmap=fh.EFFECTS_CMAP_2, ax=ax, cbar=False, vmin=0, vmax=vmax)
-                ax.set_title(f"{possibility}")
-                # Add text annotations
-                for i in range(n_heads):
-                    for j in range(n_layers):
-                        if data[i, j]:
-                            text_color = 'blue' if data[i, j] == 'K' else 'green' if data[i, j] == 'B' else 'red'
-                            ax.text(j+0.5, i+0.5, data[i, j], ha='center', va='center', color=text_color, fontsize='xx-small')
-                if col == 0:
-                    ax.set_ylabel("Head")
-                if row == n_rows - 1:
-                    ax.set_xlabel("Layer")
-            except ValueError:
-                ax.axis('off')
-
-        # Remove any unused subplots
-        for idx in range(len(self.good_results), n_rows * n_cols):
-            row = idx // n_cols
-            col = idx % n_cols
-            axes[row, col].axis('off') if n_rows > 1 else axes[col].axis('off')
-
-        plt.tight_layout()
-        plt.show()
-
-        if filename is not None:
-            fh.save(filename, fig)
-
-        self.best_heads = best_heads
-
-    def plot_attention(self, pos, index, vmax=0.5, filename=None):
+    def plot_attention(self, tag, possibility, vmax=0.5, filename=None):
         # Create a single subplot
         fig, ax = plt.subplots(figsize=(3, 4))
 
@@ -884,20 +438,15 @@ class DoubleBranchStudy(EffectStudy):
         for layer, head in rook_heads:
             data[head, layer] = 'R'
 
-        # Get the mask for the specific position
-        mask = self.good_mask[index].copy()
-        mask[:] = False
-        mask[pos] = True
-
         # Get the effects for the specific position
-        effects = self.all_attentions[mask]
+        effects = self.attention_sets[tag][possibility]
 
         # Calculate the effects for the single position
         position_effects = np.abs(effects[0].cpu().numpy())  # Use [0] to get the first (and only) item
 
         # Plot the heatmap
         sns.heatmap(position_effects.T, cmap=fh.EFFECTS_CMAP_2, ax=ax, cbar=True, vmin=0, vmax=vmax)
-        ax.set_title(f"Attention for position {pos}")
+        ax.set_title(f"Attention for position {possibility}")
 
         # Add text annotations
         for i in range(n_heads):
@@ -913,248 +462,57 @@ class DoubleBranchStudy(EffectStudy):
         plt.show()
 
         if filename is not None:
-            fh.save(filename, fig)
+            fh.save('figures/' + filename, fig)
 
+    def plot_attention_grid(self, tag, possibilities, n_cols=4, vmax=0.5, filename=None):
 
+        n_plots = len(possibilities)
+        n_rows = math.ceil(n_plots / n_cols)
 
-    @staticmethod
-    def map_to_possibility(moves):
-        mapping = {}
-        result = []
-        counter = 1
-        
-        for move in moves:
-            if move not in mapping:
-                mapping[move] = str(counter)
-                counter += 1
-            result.append(mapping[move])
-        
-        return result
+        fig, axes = plt.subplots(n_rows, n_cols, figsize=(2*n_cols, 3*n_rows), sharex=True, sharey=True)
 
-    def map_to_possibility_alt(correct_squares, incorrect_squares):
-        mapping = {}
-        result = []
-        counter = 1
+        n_layers, n_heads = 15, 24
+        data = np.full((n_heads, n_layers), '', dtype=object)
 
-        for square in correct_squares:
-            if square not in mapping:
-                mapping[square] = str(counter)  
-                counter += 1
-            result.append(mapping[square])
-        for square in incorrect_squares:
-            if square not in mapping:
-                mapping[square] = str(counter)
-                counter += 1
-            result.append(mapping[square])
+        for layer, head in knight_heads:
+            data[head, layer] = 'K'
+        for layer, head in bishop_heads:
+            data[head, layer] = 'B'
+        for layer, head in rook_heads:
+            data[head, layer] = 'R'
 
-        return result
+        for idx, possibility in enumerate(possibilities):
+            row, col = divmod(idx, n_cols)
+            ax = axes[row, col] if n_rows > 1 else axes[col]
 
-    @staticmethod
-    def get_possibility_indices(puzzles, include_starting=False):
-        possibilities = []
-        indices = {}
+            effects = self.attention_sets[tag][possibility]
 
-        for i, (_, puzzle) in enumerate(puzzles.iterrows()):
-            pv = puzzle.principal_variation
-            moves = []
-            for j in range(len(pv)):
-                if include_starting:
-                    moves += [pv[j][0:2]]
-                moves.append(pv[j][2:4])
-            possibility = ''.join(EffectStudy.map_to_possibility(moves))
-            if possibility not in indices:
-                indices[possibility] = []
-            indices[possibility].append(i)
-            possibilities.append(possibility)
-        
-        return indices
+            mean_effects = -effects.mean(dim=0).cpu().numpy()
 
-    @staticmethod
-    def get_possibility_indices_alt(main_moves):
-        possibilities = []
-        indices = {}
+            try:
+                sns.heatmap(mean_effects.T, cmap=fh.EFFECTS_CMAP_2, ax=ax, cbar=False, vmin=0, vmax=vmax)
+                ax.set_title(f"{possibility}")
+                for i in range(n_heads):
+                    for j in range(n_layers):
+                        if data[i, j]:
+                            text_color = {'K': 'blue', 'B': 'green', 'R': 'red'}[data[i, j]]
+                            ax.text(j+0.5, i+0.5, data[i, j], ha='center', va='center', color=text_color, fontsize='xx-small')
+                if col == 0:
+                    ax.set_ylabel("Head")
+                if row == n_rows - 1:
+                    ax.set_xlabel("Layer")
+            except ValueError:
+                ax.axis('off')
 
-        for i, (correct_branch, incorrect_branch) in enumerate(main_moves):
-            correct_squares = [move[2:4] for move in correct_branch]
-            incorrect_squares = [move[2:4] for move in incorrect_branch]
-            possibility = ''.join(EffectStudy.map_to_possibility_alt(correct_squares, incorrect_squares))
-            if possibility not in indices:
-                indices[possibility] = []
-            indices[possibility].append(i)
-            possibilities.append(possibility)
-        
-        return indices
-
-    @staticmethod
-    def check_no_common_elements(list_of_sublists, ignore_even=False):
-        # Convert each sublist to a set
-        set_list = [set(list_of_sublists[0]), set(list_of_sublists[1])] + [set(sublist) for i, sublist in enumerate(list_of_sublists[2:]) if i % 2 != 0 or not ignore_even]
-        
-        # Check each pair of sets for intersection
-        for i in range(len(set_list)):
-            for j in range(i + 1, len(set_list)):
-                if set_list[i].intersection(set_list[j]):
-                    return False  # Found common element(s)
-        
-        return True  # No common elements found
-
-    def create_head_to_possibilities_dict(self):
-        head_to_possibilities = {}
-        for possibility, heads in self.best_heads.items():
-            for head, effect in heads:
-                if head not in head_to_possibilities:
-                    head_to_possibilities[head] = []
-                head_to_possibilities[head].append((possibility, effect))
-        
-        # Sort each list by effect (descending) and keep only the possibilities
-        for head in head_to_possibilities:
-            head_to_possibilities[head].sort(key=lambda x: x[1], reverse=True)
-            head_to_possibilities[head] = [p for p, _ in head_to_possibilities[head]]
-        
-        # Sort the dictionary by the number of possibilities for each head
-        sorted_dict = dict(sorted(head_to_possibilities.items(), key=lambda item: len(item[1]), reverse=True))
-        
-        self.head_to_possibilities = sorted_dict
-
-    def create_head_to_possibilities_dict_with_effects(self):
-        head_to_possibilities = {}
-        for possibility, heads in self.best_heads.items():
-            for head, effect in heads:
-                if head not in head_to_possibilities:
-                    head_to_possibilities[head] = []
-                head_to_possibilities[head].append((possibility, effect))
-        
-        # Sort each list by effect (descending)
-        for head in head_to_possibilities:
-            head_to_possibilities[head].sort(key=lambda x: x[1], reverse=True)
-        
-        # Sort the dictionary by the number of possibilities for each head
-        sorted_dict = dict(sorted(head_to_possibilities.items(), key=lambda item: len(item[1]), reverse=True))
-        
-        self.head_to_possibilities_with_effects = sorted_dict
-
-    def plot_attention_effects(self, mask=None):
-        if mask is None:
-            mask = np.ones(len(self.all_attentions), dtype=bool)
-        effects = self.all_attentions[mask]
-
-        mean_effects = -effects.mean(dim=0)
-        fh.set()
-        plt.figure(figsize=(fh.get_width(0.3), 2))
-        plt.imshow(mean_effects.cpu().numpy().T, cmap=fh.EFFECTS_CMAP_2)
-        plt.title("Mean patching effects")
-        plt.ylabel("Head")
-        plt.xlabel("Layer")
-        plt.colorbar(fraction=0.10)
-        plt.show()
-
-
-class AblationStudy:
-    def __init__(self, folder_name='L12H17', device='cpu'):
-        self.folder_name = folder_name
-        self.device = device
-        self.load_ablation_data()
-
-    def load_ablation_data(self):
-        ablation = {}
-        for file in os.listdir("results/" + self.folder_name):
-            if file.endswith("_ablation.pt"):
-                # Subtract suffix _ablation.pt
-                file_prefix = file[:-12]
-                if file_prefix == 'single_weight':
-                    continue
-                if file_prefix != 'other':
-                    file_prefix = AblationStudy.pretty_prefix(file_prefix)
-                ablation[file_prefix] = torch.load("results/" + self.folder_name + "/" + file, map_location=self.device)
-        self.ablation = ablation
-
-    @staticmethod
-    def pretty_prefix(prefix):
-        first_number, _, second_number = prefix.split("_")
-        first_number = AblationStudy.word_to_number(first_number) + first_number[-2:]
-        second_number = AblationStudy.word_to_number(second_number) + second_number[-2:]
-        return first_number + r"$\to$" + second_number + ' target'
-
-    def plot_ablation_effects(self, mask=None, verbose=False, filename=None, puzzle_set=None, LH=None):
-        if mask is None:
-            mask = slice(None)
-
-        colors = {
-            "other": fh.COLORS[-1],
-            r"3rd$\to$1st target": fh.COLORS[0],
-            r"5th$\to$1st target": fh.COLORS[1],
-            r"5th$\to$3rd target": fh.COLORS[2],
-            r"7th$\to$1st target": fh.COLORS[3],
-            r"7th$\to$3rd target": fh.COLORS[4],
-            r"7th$\to$5th target": fh.COLORS[5],
-        }
-
-        # Sorted dictionary of ablation
-        sorted_ablation = dict(sorted(self.ablation.items(), key=lambda x: x[0]))
-        sorted_colors = [colors[key] for key in sorted_ablation.keys()]
-        sorted_colors_dict = dict(zip(sorted_ablation.keys(), sorted_colors))
-
-        if len(sorted_ablation) > 4:
-            scale_factor = 1.5
-        else:
-            scale_factor = 1.5
-
-        fh.set()
-        fh.plot_percentiles(
-            sorted_ablation,
-            zoom_start=94,
-            zoom_width_ratio=0.7,
-            colors=sorted_colors_dict,
-            title="Attention ablation effects" + ((" (" + puzzle_set + ", " + LH + ")") if puzzle_set is not None and LH is not None else ""),
-            figsize=(fh.get_width(0.66) * scale_factor, 2 * scale_factor),
-            tick_frequency=25,
-            zoom_tick_frequency=2,
-            y_lower=-1,
-            verbose=verbose,
-        )
-        if filename is not None:
-            fh.save(filename, plt.gcf())
-
-    @staticmethod
-    def plot_ablation_effects_grid(ablation_configs, n_cols=2, filename=None):
-        n_rows = (len(ablation_configs) + n_cols - 1) // n_cols
-        fig, axes = plt.subplots(n_rows, n_cols, figsize=(fh.TEXT_WIDTH, n_rows * 4))
-        axes = axes.flatten()
-
-        for i, (cases, puzzle_set) in enumerate(ablation_configs):
-            ax = axes[i]
-            for case in cases:
-                ablation_study = AblationStudy(folder_name=case + "_" + puzzle_set)
-                ablation_study.plot_ablation_effects(ax=ax)
-            ax.set_title(f"{puzzle_set} - {', '.join(cases)}")
-
-        # Hide any unused subplots
-        for j in range(i + 1, len(axes)):
-            axes[j].axis('off')
+        for idx in range(n_plots, n_rows * n_cols):
+            row, col = divmod(idx, n_cols)
+            if n_rows > 1:
+                axes[row, col].axis('off')
+            else:
+                axes[col].axis('off')
 
         plt.tight_layout()
-        if filename is not None:
-            plt.savefig(filename, bbox_inches='tight')
         plt.show()
 
-        
-
-
-
-
-    @staticmethod
-    def word_to_number(word):
-        ordinal_dict = {
-            'first': 1, 'second': 2, 'third': 3, 'fourth': 4, 'fifth': 5,
-            'sixth': 6, 'seventh': 7, 'eighth': 8, 'ninth': 9, 'tenth': 10,
-            'eleventh': 11, 'twelfth': 12, 'thirteenth': 13, 'fourteenth': 14, 'fifteenth': 15,
-            'sixteenth': 16, 'seventeenth': 17, 'eighteenth': 18, 'nineteenth': 19, 'twentieth': 20
-        }
-        
-        return str(ordinal_dict.get(word.lower(), None))
-
-def prob_to_logodds(prob):
-    return np.log(prob / (1 - prob))
-
-def logodds_to_prob(logodds):
-    return 1 / (1 + np.exp(-logodds))
+        if filename is not None:
+            fh.save('figures/' + filename, fig)
