@@ -73,6 +73,7 @@ class GeneralStudy:
                 if tag not in self.puzzle_sets:
                     self.puzzle_sets[tag] = {}
                 with open(f"puzzles/{filename}", "rb") as f:
+                    #print(f"Loading {filename}, with tag {tag} and possibility {possibility}")
                     self.puzzle_sets[tag][possibility] = pickle.load(f)
 
     def load_effect_sets(self):
