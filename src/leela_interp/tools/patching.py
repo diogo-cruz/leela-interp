@@ -312,8 +312,20 @@ def _activation_patch_single_board_batch(
         rest = tuple(rest)
         act[(slice(None),) + rest] = corrupted_activations[layer][(slice(None),) + rest]
 
+    def _activation_patching_func_multiple(location, model, batch_indices):
+        for case in location:
+            layer, *rest = case
+            act = module_func(layer).output
+            rest = tuple(rest)
+            act[(slice(None),) + rest] = corrupted_activations[layer][(slice(None),) + rest]
+
+    if isinstance(locations[0][0], int):
+        patching_func = _activation_patching_func
+    else:
+        patching_func = _activation_patching_func_multiple
+
     return patch(
-        _activation_patching_func,
+        patching_func,
         locations,
         boards=boards,
         model=model,
