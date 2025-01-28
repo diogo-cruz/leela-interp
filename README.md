@@ -1,8 +1,24 @@
-# Evidence of Learned Look-Ahead in a Chess-Playing Neural Network
+# Understanding the learned look-ahead behavior of chess neural networks
 
-[**Project page**](https://leela-interp.github.io/) | [**Paper**](https://arxiv.org/abs/2406.00877)
+This repository is a fork of [leela-interp](https://github.com/HumanCompatibleAI/leela-interp) by Jenner et al., which provided the first evidence of learned look-ahead behavior in chess neural networks. This fork extends their work to analyze longer-term planning capabilities and alternative move considerations.
 
-## Setup
+[**Original Project Page**](https://leela-interp.github.io/) | [**Original Paper**](https://arxiv.org/abs/2406.00877)
+
+## Extensions in this Fork
+
+This fork builds upon the original work to investigate:
+- Look-ahead capabilities up to the 7th move in chess positions
+- Analysis of how the model considers multiple possible move sequences
+- Detailed study of attention head behavior in different tactical scenarios
+- Extended analysis of checkmate vs non-checkmate positions
+
+Most of the original codebase remains unchanged. The main additions/modifications are in:
+- New puzzle generation scripts for 7-move and alternative move analysis
+- Extended analysis tools in the core package
+- Additional notebooks for analyzing longer move sequences
+- Modified patching and probing implementations to handle multiple branches
+
+## Original Setup Instructions
 
 ```
 pip install -e .
@@ -72,8 +88,9 @@ but it might not suit your needs.
 ## Known issues
 We've observed `NaN` outputs for Leela on MPS sometimes (but never on CPU or CUDA).
 
-# Citation
-If you find this codebase helpful for your research, please cite our paper:
+## Citation
+
+If you use this codebase, please cite both the original paper and our follow-up work:
 
 ```
 @misc{jenner2024evidence,
@@ -84,4 +101,6 @@ If you find this codebase helpful for your research, please cite our paper:
       archivePrefix={arXiv},
       primaryClass={cs.LG}
 }
+
+// TODO: Add citation for the follow-up paper when available
 ```
