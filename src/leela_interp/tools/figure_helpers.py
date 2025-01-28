@@ -229,6 +229,11 @@ def plot_percentiles(
         #ax2.set_yticklabels([])
         ax2.tick_params(axis="y", which="both", length=0)
 
+        # Explicitly set the same y-limits for zoomed plot
+        if y_lower is not None or y_upper is not None:
+            current_ylim = ax1.get_ylim()
+            ax2.set_ylim(current_ylim)
+
     axes = [ax1]
     if zoom_start is not None:
         axes.append(ax2)

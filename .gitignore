@@ -19,3 +19,5 @@ __pycache__
 lichess_db_puzzle.csv
 lichess_db_puzzle.csv.zst
 *.pkl
+logs/
+__pycache__/

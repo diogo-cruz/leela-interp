@@ -128,6 +128,7 @@ class FifthMoveStudy(GeneralStudy):
                 continue
             
             mean_effects = np.mean(effects, axis=0)
+            #stderr_effects = 2 * np.std(effects, axis=0) / np.sqrt(len(effects))
 
             ax.plot(
                 layers,
@@ -137,7 +138,22 @@ class FifthMoveStudy(GeneralStudy):
                 linestyle=line_styles[i],
                 linewidth= 3 * fh.LINE_WIDTH,
             )
+            # ax.plot(
+            #     layers,
+            #     mean_effects,
+            #     label=effect_data["name"],
+            #     color=colors[i],
+            #     linestyle=line_styles[i],
+            #     linewidth= 3 * fh.LINE_WIDTH,
+            # )
             if plot_ci:
+                # ax.fill_between(
+                #     layers,
+                #     mean_effects - stderr_effects,
+                #     mean_effects + stderr_effects,
+                #     color=colors[i],
+                #     alpha=fh.ERROR_ALPHA,
+                # )
                 ci_50 = np.quantile(effects, [0.25, 0.75], axis=0)
                 ci_90 = np.quantile(effects, [0.05, 0.95], axis=0)
                 if not clean_plot:

@@ -90,7 +90,11 @@ def third_to_first_vs_other_ablations(model, boards, puzzles, args):
 
     return third_to_first_effects.squeeze(-1), other_effects.squeeze(-1)
 
-def third_to_first_vs_other_double_branch_ablations(model, boards, puzzles, args):
+def third_to_first_vs_other_double_branch_ablations(model, boards, puzzles, args, branch=1):
+    if branch == 1:
+        override_best_move_indices = None
+    elif branch == 2:
+        override_best_move_indices = 0
     first_target_squares_1 = puzzles.branch_1.apply(lambda x: x[0][2:4])
     third_target_squares_1 = puzzles.branch_1.apply(lambda x: x[2][2:4])
     first_target_squares_2 = puzzles.branch_2.apply(lambda x: x[0][2:4])
@@ -178,6 +182,7 @@ def third_to_first_vs_other_double_branch_ablations(model, boards, puzzles, args
         boards=boards,
         batch_size=args.batch_size,
         pbar="batch",
+        override_best_move_indices = override_best_move_indices
     )
     third_2_to_first_2_effects = -patching.patch(
         patching_func=_third_2_to_first_2_ablate,
@@ -186,6 +191,7 @@ def third_to_first_vs_other_double_branch_ablations(model, boards, puzzles, args
         boards=boards,
         batch_size=args.batch_size,
         pbar="batch",
+        override_best_move_indices = override_best_move_indices
     )
     third_1_to_first_2_effects = -patching.patch(
         patching_func=_third_1_to_first_2_ablate,
@@ -194,6 +200,7 @@ def third_to_first_vs_other_double_branch_ablations(model, boards, puzzles, args
         boards=boards,
         batch_size=args.batch_size,
         pbar="batch",
+        override_best_move_indices = override_best_move_indices
     )
     third_2_to_first_1_effects = -patching.patch(
         patching_func=_third_2_to_first_1_ablate,
@@ -202,6 +209,7 @@ def third_to_first_vs_other_double_branch_ablations(model, boards, puzzles, args
         boards=boards,
         batch_size=args.batch_size,
         pbar="batch",
+        override_best_move_indices = override_best_move_indices
     )
     other_effects = -patching.patch(
         patching_func=_other_ablate,
@@ -210,6 +218,7 @@ def third_to_first_vs_other_double_branch_ablations(model, boards, puzzles, args
         boards=boards,
         batch_size=args.batch_size,
         pbar="batch",
+        override_best_move_indices = override_best_move_indices
     )
 
     return third_1_to_first_1_effects.squeeze(-1), third_2_to_first_2_effects.squeeze(-1), third_1_to_first_2_effects.squeeze(-1), third_2_to_first_1_effects.squeeze(-1), other_effects.squeeze(-1)
@@ -668,36 +677,39 @@ def main(args):
     case_size = len(case_number)
     common_str = args.filename[20:-len(case_number)-1]
 
-    if match and (case_size in [5, 7, 9]):
-        if case_size == 5:
-            # Check if the first and third digits of case_number are the same
-            if case_number[0] == case_number[2]:
-                case_type = "AAC"
-            else:
-                if case_number[0] == case_number[4]:
-                    case_type = "ABA"
-                elif case_number[2] == case_number[4]:
-                    case_type = "ABB"
-                else:
-                    case_type = "ABC"
-        elif case_size == 7:
-            if case_number[0] == case_number[2]:
-                if len(set(list(case_number[::2]))) == 3:
-                    case_type = "AACD"
-                else:
-                    raise NotImplementedError
-            else:
-                if len(set(list(case_number[::2]))) == 4:
-                    case_type = "ABCD"
-                else:
-                    raise NotImplementedError
-        else:
-            raise NotImplementedError
+    if args.double_game:
+        case_type = "AB"
     else:
-        if case_number[0] == case_number[2]:
-            case_type = "AB"
+        if match and (case_size in [5, 7, 9]):
+            if case_size == 5:
+                # Check if the first and third digits of case_number are the same
+                if case_number[0] == case_number[2]:
+                    case_type = "AAC"
+                else:
+                    if case_number[0] == case_number[4]:
+                        case_type = "ABA"
+                    elif case_number[2] == case_number[4]:
+                        case_type = "ABB"
+                    else:
+                        case_type = "ABC"
+            elif case_size == 7:
+                if case_number[0] == case_number[2]:
+                    if len(set(list(case_number[::2]))) == 3:
+                        case_type = "AACD"
+                    else:
+                        raise NotImplementedError
+                else:
+                    if len(set(list(case_number[::2]))) == 4:
+                        case_type = "ABCD"
+                    else:
+                        raise NotImplementedError
+            else:
+                raise NotImplementedError
         else:
-            raise NotImplementedError
+            if case_number[0] == case_number[2]:
+                case_type = "AB"
+            else:
+                raise NotImplementedError
 
     # if case_type == "AB":
     #     save_dir = base_dir / f"results/L{args.layer}H{args.head}"
@@ -720,13 +732,21 @@ def main(args):
         if case_type == "AB" or case_type == "ABA" or case_type == "ABB":
             if args.double_game:
                 third_1_to_first_1_effects, third_2_to_first_2_effects, third_1_to_first_2_effects, third_2_to_first_1_effects, other_effects = third_to_first_vs_other_double_branch_ablations(
-                    model, boards, puzzles, args
+                    model, boards, puzzles, args, branch=1
                 )
                 torch.save(third_1_to_first_1_effects, save_dir / "third_1_to_first_1_ablation.pt")
                 torch.save(third_2_to_first_2_effects, save_dir / "third_2_to_first_2_ablation.pt")
                 torch.save(third_1_to_first_2_effects, save_dir / "third_1_to_first_2_ablation.pt")
                 torch.save(third_2_to_first_1_effects, save_dir / "third_2_to_first_1_ablation.pt")
                 torch.save(other_effects, save_dir / "other_ablation.pt")
+                third_1_to_first_1_effects, third_2_to_first_2_effects, third_1_to_first_2_effects, third_2_to_first_1_effects, other_effects = third_to_first_vs_other_double_branch_ablations(
+                    model, boards, puzzles, args, branch=2
+                )
+                torch.save(third_1_to_first_1_effects, save_dir / "third_1_to_first_1_ablation_b.pt")
+                torch.save(third_2_to_first_2_effects, save_dir / "third_2_to_first_2_ablation_b.pt")
+                torch.save(third_1_to_first_2_effects, save_dir / "third_1_to_first_2_ablation_b.pt")
+                torch.save(third_2_to_first_1_effects, save_dir / "third_2_to_first_1_ablation_b.pt")
+                torch.save(other_effects, save_dir / "other_ablation_b.pt")
             else:
                 third_to_first_effects, other_effects = third_to_first_vs_other_ablations(
                     model, boards, puzzles, args

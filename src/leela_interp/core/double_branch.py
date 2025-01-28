@@ -10,7 +10,7 @@ import pickle
 import random
 import os
 import math
-
+import re
 import chess
 import iceberg as ice
 from matplotlib.patches import Patch
@@ -33,10 +33,12 @@ class DoubleBranchStudy(GeneralStudy):
     def __init__(self, *args, load_sets=True, load_all=True, **kwargs):
         super().__init__(*args, **kwargs, load_all=load_all)
         if load_all:
+            self.load_effects_b()
             self.check_contains_double_branch()
         if load_sets:
             self.load_puzzle_sets()
             self.load_effect_sets()
+            self.load_effect_sets_b()
             self.load_attention_sets()
 
     def check_contains_double_branch(self):
@@ -46,6 +48,38 @@ class DoubleBranchStudy(GeneralStudy):
         
         if missing_columns:
             raise ValueError(f"The following required columns are missing from self.puzzles: {', '.join(missing_columns)}")
+        
+    def load_effects_b(self):
+        if os.path.exists(f"results/global_patching/interesting_puzzles{self.puzzlename}_residual_stream_results_b.pt"):
+            self.all_effects_b = -torch.load(
+                f"results/global_patching/interesting_puzzles{self.puzzlename}_residual_stream_results_b.pt",
+                map_location=self.device
+            )
+        else:
+            print("No residual stream results B found.")
+        
+    def load_effect_sets_b(self):
+        self.effect_sets_b = {}
+        for filename in os.listdir("results/global_patching"):
+            match = re.search(rf'interesting_puzzles{self.puzzlename}_([a-zA-Z])_(\d+)_residual_stream_results_b\.pt$', filename)
+            if match:
+                tag, possibility = match.group(1), match.group(2)
+                if tag not in self.effect_sets_b:
+                    self.effect_sets_b[tag] = {}
+                with open(f"results/global_patching/{filename}", "rb") as f:
+                    self.effect_sets_b[tag][possibility] = torch.load(f)
+
+    def export_puzzle_set_info_b(self, tag='b'):
+        tag = 's' if hasattr(self, 'include_starting') and self.include_starting else tag
+        for (possibility, idx_list), mask in zip(self.result_sets.items(), self.result_masks):
+            with open(f"puzzles/interesting_puzzles{self.puzzlename}_{tag}_{possibility}.pkl", "wb") as f:
+                pickle.dump(self.puzzles[mask], f)
+            with open(f"results/global_patching/interesting_puzzles{self.puzzlename}_{tag}_{possibility}_attention_head_results.pt", "wb") as f:
+                torch.save(self.all_attentions[mask], f)
+            with open(f"results/global_patching/interesting_puzzles{self.puzzlename}_{tag}_{possibility}_residual_stream_results.pt", "wb") as f:
+                torch.save(self.all_effects[mask], f)
+            with open(f"results/global_patching/interesting_puzzles{self.puzzlename}_{tag}_{possibility}_residual_stream_results_b.pt", "wb") as f:
+                torch.save(self.all_effects_b[mask], f)
 
     @staticmethod
     def check_if_double_branch(model, puzzles_original, must_include_pv=True, end: int = 3, min_prob: float | list[float] = 0.1):
@@ -196,8 +230,8 @@ class DoubleBranchStudy(GeneralStudy):
         
         return indices
     
-    def get_effect_set_data(self, tag, possibility, verbose=False):
-        effects = self.effect_sets[tag][possibility]
+    def get_effect_set_data(self, tag, possibility, verbose=False, b=False):
+        effects = self.effect_sets[tag][possibility] if not b else self.effect_sets_b[tag][possibility]
         include_branch = tag == "b"
         max_length = len(possibility) // (2 if include_branch else 1)
 
@@ -258,15 +292,160 @@ class DoubleBranchStudy(GeneralStudy):
         effects_data = [
             {"effects": patching_square_effects, "name": "Corrupted"},
             {"effects": other_effects, "name": "Other"},
-            {"effects": candidate_effects, "name": "Move 1"},
         ]
-        effects_data.extend({"effects": effects, "name": f"Move {j}"} for j, effects in follow_up_effects.items())
+        
         if include_starting:
-            effects_data.extend({"effects": effects, "name": f"Move {j}B"} for j, effects in starting_effects.items())
+            effects_data.extend([{"effects": candidate_effects, "name": "Move 1A"}])
+            #effects_data.extend({"effects": effects, "name": f"Move {j}A"} for j, effects in follow_up_effects.items())
+            #effects_data.extend({"effects": effects, "name": f"Move {j}B"} for j, effects in starting_effects.items())
+            # Check if starting_effects[1] exists and is not empty
+            if 1 in starting_effects and len(starting_effects[1]) > 0:
+                effects_data.extend([{"effects": starting_effects[1], "name": "Move 1B"}])
+            
+            for j in range(2, max(follow_up_effects.keys()) + 1):
+                if j in follow_up_effects and len(follow_up_effects[j]) > 0:
+                    effects_data.extend([{"effects": follow_up_effects[j], "name": f"Move {j}A"}])
+                if j in starting_effects and len(starting_effects[j]) > 0:
+                    effects_data.extend([{"effects": starting_effects[j], "name": f"Move {j}B"}])
+        else:
+            effects_data.extend([{"effects": candidate_effects, "name": "Move 1"}])
+            effects_data.extend({"effects": effects, "name": f"Move {j}"} 
+                              for j, effects in follow_up_effects.items() 
+                              if len(effects) > 0)
         
         return effects_data
 
-    def plot_residual_effects(self, tag, possibility, filename=None, plot_ci=True, ax=None, row_col=None, log=False, clean_plot=False):
+    def plot_residual_effects(self, tag, possibility, filename=None, plot_ci=True, ax=None, row_col=None, log=False, clean_plot=False, b=False):
+        ax_init = None if ax is None else ax
+
+        branch_1_probs = np.vstack(self.puzzle_sets[tag][possibility].branch_1_probs.to_numpy())
+        branch_2_probs = np.vstack(self.puzzle_sets[tag][possibility].branch_2_probs.to_numpy())
+        branch_probs = np.vstack((branch_1_probs[:, 0], branch_2_probs[:, 0])).T
+        sorted_indices = np.argsort(branch_probs[:, 0] - branch_probs[:, 1])
+
+        effects_data, nonskipped = self.get_effect_set_data(tag, possibility, b=b)
+        # Find the new indices corresponding to sorted_indices in the nonskipped subset
+        nonskipped_indices = [self.puzzle_sets[tag][possibility].index.get_loc(idx) for idx in nonskipped]
+        #print(sorted_indices, nonskipped_indices)
+        new_sorted_indices = []
+        for idx in sorted_indices:
+            if idx in nonskipped_indices:
+                new_idx = nonskipped_indices.index(idx)
+                new_sorted_indices.append(new_idx)
+        
+        # Use new_sorted_indices instead of sorted_indices for indexing effects
+        sorted_indices = new_sorted_indices[:]
+        #print(sorted_indices)
+        max_length = len(possibility) // (2 if tag != "n" else 1)
+
+        fh.set()
+
+        # line_styles = ["-"] * 2 + ["-", "--"] * ((max_length - 1) // 2) + ["-"]
+
+        # colors = plt.cm.tab20(np.linspace(0, 1, 20)).tolist()[:len(line_styles)]
+        # layers = list(range(15))
+
+        # line_styles += ["-", "--"] * ((max_length - 1) // 2) + ["-"]
+        # colors += plt.cm.tab20(np.linspace(0, 1, 20)).tolist()[len(line_styles) - len(colors) + 5:]
+
+        layers = list(range(15))
+
+        line_styles = ["-"] * 2 + ["-", "--"] * (max_length - 1) * 2
+        colors = plt.cm.tab20(np.linspace(0, 1, 20)).tolist()
+        colors = colors[:4] + colors[6:8] + colors[4:6] + colors[8:len(line_styles)]
+
+        # Create plots using matplotlib
+        if ax is None:
+            fig, ax = plt.subplots()
+            if not clean_plot:
+                fig.set_figwidth(6)
+                fig.set_figheight(4)
+            else:
+                fig.set_figwidth(3)
+                fig.set_figheight(2)
+
+        for i, effect_data in enumerate(effects_data):
+            if "B" in effect_data["name"]:
+                effects = effect_data["effects"]
+                len_effects = len(effects)
+                effects = effects[sorted_indices]
+            else:
+                effects = effect_data["effects"]
+                len_effects = len(effects)
+                effects = effects[sorted_indices]
+            #effects = np.abs(effect_data["effects"])[sorted_indices]
+            if i==0:    
+                print(possibility, len_effects, len(effects))
+            if len(effects) == 0:
+                continue
+            
+            mean_effects = np.mean(effects, axis=0)
+            stderr_effects = np.std(effects, axis=0) / np.sqrt(len(effects))
+
+            ax.plot(
+                layers,
+                mean_effects,
+                label=effect_data["name"],
+                color=colors[i],
+                linestyle=line_styles[i],
+                linewidth= 3 * fh.LINE_WIDTH,
+            )
+            if plot_ci:
+                ax.fill_between(
+                    layers,
+                    mean_effects - stderr_effects,
+                    mean_effects + stderr_effects,
+                    color=colors[i],
+                    alpha=fh.ERROR_ALPHA,
+                )
+                # ci_50 = np.quantile(effects, [0.25, 0.75], axis=0)
+                # ci_90 = np.quantile(effects, [0.05, 0.95], axis=0)
+                # if not clean_plot:
+                #     ax.fill_between(
+                #         layers,
+                #         ci_90[0],
+                #         ci_90[1],
+                #         color=colors[i],
+                #         alpha=0.1,
+                #     )
+                # ax.fill_between(
+                #     layers,
+                #     ci_50[0],
+                #     ci_50[1],
+                #     color=colors[i],
+                #     alpha=0.3,
+                # )
+
+        # ax.set_title("Patching effects on different squares by layer")
+        if row_col is not None:
+            #ax.set_title(f"Possibility: {row_col[2]}")
+            if row_col[0]:
+                ax.set_xlabel("Layer")
+            if row_col[1]:
+                ax.set_ylabel("Log odds reduction")
+        else:
+            ax.set_xlabel("Layer")
+            ax.set_ylabel(f"Log odds reduction for branch {'B' if b else 'A'}")
+        _, y_max = ax.get_ylim()
+        ax.set_xlim(0, 14)
+        #ax.set_ylim(1e-2, 2)
+        ax.set_ylim(-1., 1.5)
+        if log:
+            ax.set_yscale("symlog", linthresh=1e-2)
+        if row_col is not None:
+            ax.legend(loc="upper left", title=f"Set {row_col[2]}" if "Branch" not in row_col[2] else f"{row_col[2]}")
+        else:
+            ax.legend(loc="upper left")
+        ax.spines[["right", "top", "left"]].set_visible(False)
+        ax.set_facecolor(fh.PLOT_FACE_COLOR)
+
+        if filename is not None and ax_init is None:
+            fh.save('figures/' + filename, fig)
+
+        if ax is None:
+            plt.show()
+
+    def _plot_residual_effects_extended(self, tag, possibility, filename=None, plot_ci=True, ax=None, row_col=None, log=False, clean_plot=False):
         ax_init = None if ax is None else ax
 
         branch_1_probs = np.vstack(self.puzzle_sets[tag][possibility].branch_1_probs.to_numpy())
@@ -337,23 +516,15 @@ class DoubleBranchStudy(GeneralStudy):
                 linewidth= 3 * fh.LINE_WIDTH,
             )
             if plot_ci:
-                ci_50 = np.quantile(effects, [0.25, 0.75], axis=0)
-                ci_90 = np.quantile(effects, [0.05, 0.95], axis=0)
-                if not clean_plot:
+                for k in range(1, 11):
+                    ci = np.quantile(effects, [0.5 - 0.05 * k, 0.5 + 0.05 * k], axis=0)
                     ax.fill_between(
                         layers,
-                        ci_90[0],
-                        ci_90[1],
+                        ci[0],
+                        ci[1],
                         color=colors[i],
-                        alpha=0.1,
+                        alpha=0.2*np.sqrt(1.1 - 0.1 * k),
                     )
-                ax.fill_between(
-                    layers,
-                    ci_50[0],
-                    ci_50[1],
-                    color=colors[i],
-                    alpha=0.3,
-                )
 
         # ax.set_title("Patching effects on different squares by layer")
         if row_col is not None:
@@ -420,6 +591,8 @@ class DoubleBranchStudy(GeneralStudy):
 
         if filename is not None:
             fh.save('figures/' + filename, fig)
+
+    
 
     def plot_attention(self, tag, possibility, vmax=0.5, filename=None):
         # Create a single subplot
@@ -516,3 +689,77 @@ class DoubleBranchStudy(GeneralStudy):
 
         if filename is not None:
             fh.save('figures/' + filename, fig)
+
+    def plot_residual_effects_grid_A_vs_B(self, tag, possibilities, n_cols=2, filename=None, log=False):
+        #TODO
+        fix = 1
+        nfix = 3 - fix
+        n_plots = len(possibilities) * nfix
+        n_rows = math.ceil(n_plots / n_cols)
+        
+        fig, axes = plt.subplots(n_rows, n_cols * fix, figsize=(3*n_cols* fix, 2.2*n_rows), sharex=True, sharey=True)
+        
+        for idx, possibility in enumerate(possibilities):
+            row = idx // n_cols
+            col = (idx % n_cols) * fix
+            
+            # Get the axes for both A and B plots
+            ax_a = axes[row, col] if n_rows > 1 else axes[col]
+            ax_b = axes[row, col+1] if n_rows > 1 else axes[col+1]
+            
+            # Set legend titles based on number of possibilities
+            legend_a = f"{possibility} A" if len(possibilities) > 1 else "Branch A"
+            legend_b = f"{possibility} B" if len(possibilities) > 1 else "Branch B"
+            
+            try:
+                # Plot A (b=False)
+                self.plot_residual_effects(
+                    tag=tag,
+                    possibility=possibility,
+                    ax=ax_a,
+                    row_col=(row == n_rows - 1, col == 0, legend_a),
+                    plot_ci=True,
+                    filename=None,
+                    log=log,
+                    b=False
+                )
+                
+                # Plot B (b=True)
+                self.plot_residual_effects(
+                    tag=tag,
+                    possibility=possibility,
+                    ax=ax_b,
+                    row_col=(row == n_rows - 1, False, legend_b),
+                    plot_ci=True,
+                    filename=None,
+                    log=log,
+                    b=True
+                )
+            except ValueError:
+                ax_a.set_visible(False)
+                ax_b.set_visible(False)
+        
+        # Hide any unused subplots
+        for idx in range(n_plots, n_rows * n_cols):
+            row = idx // n_cols
+            col = (idx % n_cols) * fix
+            if n_rows > 1:
+                axes[row, col].set_visible(False)
+                axes[row, col+1].set_visible(False)
+            else:
+                axes[col].set_visible(False)
+                axes[col+1].set_visible(False)
+        
+        plt.tight_layout()
+
+        if filename is not None:
+            if fig is None:
+                fig = plt.gcf()
+
+            #plt.tight_layout()
+            fig.savefig('figures/' + filename + '.pdf')
+            fig.savefig('figures/' + filename + '.png', dpi=300)
+        plt.show()
+
+        # if filename is not None:
+        #     fh.save('figures/' + filename, fig)

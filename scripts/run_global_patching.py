@@ -38,8 +38,19 @@ def main(args):
             # The puzzles we loaded already specify corrupted board positions
             puzzles=puzzles,
             batch_size=args.batch_size,
+            override_best_move_indices=None,
         )
         torch.save(effects, save_dir / (args.filename + "_residual_stream_results.pt"))
+
+        if args.double_branch:
+            effects = patching.residual_stream_activation_patch(
+                model=model,
+                # The puzzles we loaded already specify corrupted board positions
+                puzzles=puzzles,
+                batch_size=args.batch_size,
+                override_best_move_indices=0,
+            )
+            torch.save(effects, save_dir / (args.filename + "_residual_stream_results_b.pt"))
 
     if args.attention:
         # Ablate one attention head at a time
@@ -114,5 +125,6 @@ if __name__ == "__main__":
     parser.add_argument("--residual_stream", action="store_true")
     parser.add_argument("--attention", action="store_true")
     parser.add_argument("--double_attention", default=(-1, 2), nargs=2, type=int)
+    parser.add_argument("--double_branch", action="store_true")
     args = parser.parse_args()
     main(args)

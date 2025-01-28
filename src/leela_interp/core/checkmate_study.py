@@ -227,7 +227,8 @@ class CheckmateStudy(FifthMoveStudy):
             ax = axes[row, 2*col] if n_rows > 1 else axes[2*col]
             try:
                 sns.heatmap(mean_effects_1.T, cmap=fh.EFFECTS_CMAP_2, ax=ax, cbar=False, vmin=0, vmax=vmax)
-                ax.set_title(f"{possibility}, Mate in {n_turns}, {mask_1.sum()}")
+                #ax.set_title(f"{possibility}, Mate in {n_turns}, {mask_1.sum()}")
+                ax.set_title(f"M{possibility}")
                 for i in range(n_heads):
                     for j in range(n_layers):
                         if data[i, j]:
@@ -243,7 +244,8 @@ class CheckmateStudy(FifthMoveStudy):
             ax = axes[row, 2*col+1] if n_rows > 1 else axes[2*col+1]
             try:
                 sns.heatmap(mean_effects_2.T, cmap=fh.EFFECTS_CMAP_2, ax=ax, cbar=False, vmin=0, vmax=vmax)
-                ax.set_title(f"{possibility}, No mate, {mask_2.sum()}")
+                #ax.set_title(f"{possibility}, No mate, {mask_2.sum()}")
+                ax.set_title(f"N{possibility}")
                 for i in range(n_heads):
                     for j in range(n_layers):
                         if data[i, j]:

@@ -18,7 +18,7 @@ import torch
 from chess import Move
 from matplotlib.cm import ScalarMappable
 
-from .iceberg_board import IcebergBoard
+from .iceberg_board import IcebergBoard, IcebergBoardExtended
 from .uci_to_idx import idx_to_uci as _idx_to_uci
 from .uci_to_idx import uci_to_idx as _uci_to_idx
 from .utils import idx2sq, sq2idx
@@ -496,4 +496,72 @@ class LeelaBoard:
                 self.pc_board.halfmove_clock,
             )
             + tuple(self.pc_board.move_stack[-7:])
+        )
+
+class LeelaBoardExtended(LeelaBoard):
+    turn = pc_board_property("turn")
+    move_stack = pc_board_property("move_stack")
+    _plane_bytes_struct = struct.Struct(">Q")
+
+    def __init__(self):
+        """If leela_board is passed as an argument, return a copy"""
+        super().__init__()
+
+    @classmethod
+    def from_puzzle(cls, puzzle: pd.Series, fast: bool = True):
+        """Load a board from the Lichess puzzle pandas DataFrame."""
+        fen = puzzle["FEN"]
+
+        if fast:
+            return cls.from_fen(fen, puzzle["Moves"].split(" ")[:1], uci=True)
+
+        fen_board = chess.Board(fen)
+
+        game = chess.pgn.read_game(io.StringIO(puzzle["PGN"]))
+        moves = list(game.mainline_moves())
+        uci_moves = [move.uci() for move in moves]
+        leela_board = cls()
+        moves_so_far = []
+        for move in uci_moves:
+            if leela_board.pc_board == fen_board:
+                break
+            leela_board.push_uci(move)
+            moves_so_far.append(move)
+
+        next_moves = puzzle["Moves"].split(" ")
+
+        moves_so_far.append(next_moves[0])
+        leela_board.push_uci(next_moves[0])
+
+        return leela_board
+
+    def plot(
+        self,
+        heatmap: torch.Tensor
+        | np.ndarray
+        | list[str]
+        | dict[str, str | float]
+        | None = None,
+        moves: str | list[str] | None = None,
+        highlight: str | None = None,
+        caption: str | None = None,
+        cmap: str = "YlOrRd",
+        mappable: ScalarMappable | None = None,
+        zero_center: bool = False,
+        arrows: dict[str, str] | None = None,
+        attn_map: torch.Tensor | np.ndarray | None = None,
+        show_lastmove: bool = True,
+    ):
+        return IcebergBoardExtended(
+            board=self.pc_board,
+            heatmap=heatmap,
+            next_moves=moves,
+            highlight=highlight,
+            caption=caption,
+            cmap=cmap,
+            mappable=mappable,
+            zero_center=zero_center,
+            arrows=arrows,
+            attn_map=attn_map,
+            show_lastmove=show_lastmove,
         )

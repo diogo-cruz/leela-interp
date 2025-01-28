@@ -62,7 +62,7 @@ def patch(
     | None = None,
     location_batch_size: int = 1,
     batch_size: int = 64,
-    override_best_move_indices: torch.Tensor | None = None,
+    override_best_move_indices: torch.Tensor | int | None = None,
     pbar: str = "location",
 ):
     """Generic patching function for a batch of inputs.
@@ -138,8 +138,8 @@ def patch(
                 override_best_move_indices=override_best_move_indices[
                     i : i + batch_size
                 ]
-                if override_best_move_indices is not None
-                else None,
+                if override_best_move_indices
+                else override_best_move_indices,
                 locations=locations,
                 location_batch_size=location_batch_size,
                 patching_func=patching_func,
@@ -178,7 +178,11 @@ def _patch_single_board_batch(
         logits = output[0]
         # Need to do this to zero out illegal moves before computing the top move idx:
         probs = model.logits_to_probs(boards, logits, legal_move_mask=legal_move_mask)
-        best_move_indices = probs.argmax(dim=1, keepdim=True).save()
+        if override_best_move_indices == 0:
+            # Get indices that would sort in descending order and take second best (index 1)
+            best_move_indices = probs.argsort(dim=1, descending=True)[:, 1:2].save()
+        else:
+            best_move_indices = probs.argmax(dim=1, keepdim=True).save()
         clean_results = output_func(
             override_best_move_indices or best_move_indices,
             model,
@@ -232,6 +236,7 @@ def activation_patch(
     | None = None,
     location_batch_size: int = 1,
     batch_size: int = 64,
+    override_best_move_indices: torch.Tensor | int | None = None,
 ) -> torch.Tensor:
     if puzzles is None:
         assert boards is not None
@@ -278,6 +283,7 @@ def activation_patch(
                 location_batch_size=location_batch_size,
                 module_func=module_func,
                 effect_type=effect_type,
+                override_best_move_indices=override_best_move_indices,
             )
         )
 
@@ -298,6 +304,7 @@ def _activation_patch_single_board_batch(
     location_batch_size,
     effect_type,
     module_func,
+    override_best_move_indices,
 ):
     with model.trace(corrupted_boards):
         corrupted_activations = [
@@ -333,6 +340,7 @@ def _activation_patch_single_board_batch(
         output_func=output_func,
         location_batch_size=location_batch_size,
         batch_size=len(boards),
+        override_best_move_indices=override_best_move_indices,
     )
 
 
@@ -349,6 +357,7 @@ def residual_stream_activation_patch(
     batch_size: int = 64,
     location_batch_size: int = 1,
     module_func: Callable[[int], torch.nn.Module] | None = None,
+    override_best_move_indices: torch.Tensor | int | None = None,
 ) -> torch.Tensor:
     if module_func is None:
         module_func = model.residual_stream
@@ -372,6 +381,7 @@ def residual_stream_activation_patch(
         output_func=output_func,
         batch_size=batch_size,
         location_batch_size=location_batch_size,
+        override_best_move_indices=override_best_move_indices,
     )
 
     return rearrange(

@@ -241,8 +241,11 @@ def compute_scores_2(
     )
     sparring_decrease_2 = sparring_log_odds_2[None] - sparring_corrupted_log_odds_2
 
-    mask = (sparring_decrease < 0.2).float()
-    mask *= (sparring_decrease_2 < 0.2).float()
+    #mask = (sparring_decrease < 0.2).float()
+    #mask *= (sparring_decrease_2 < 0.2).float()
+
+    mask = (sparring_decrease < 0.3).float()
+    mask *= (sparring_decrease_2 < 0.3).float()
 
     # 2. We don't want the corruption to make the position *better*, that would indicate
     # that there's just some other move now that's even better, rather than the previous
@@ -250,14 +253,17 @@ def compute_scores_2(
     value = value_fn(original_wdl)
     corrupted_value = value_fn(corrupted_wdl)
     value_change = corrupted_value - value
-    mask *= (value_change < -0.1).float()
+    #mask *= (value_change < -0.1).float()
+    mask *= (value_change < -0.0).float()
 
     # 3. We also want the new probability to be reasonably low, i.e. the previous top
     # move should now be bad. This is necessary to make activation patching useful
     # at all (if the corruption doesn't change the best move by much, there's no reason
     # to expect a clear effect from patching).
-    mask *= (corrupted_policy[:, move_idx] < 0.1).float()
-    mask *= (corrupted_policy[:, move_idx_2] < 0.1).float()
+    #mask *= (corrupted_policy[:, move_idx] < 0.1).float()
+    #mask *= (corrupted_policy[:, move_idx_2] < 0.1).float()
+    mask *= (corrupted_policy[:, move_idx] < 0.2).float()
+    mask *= (corrupted_policy[:, move_idx_2] < 0.2).float()
 
     # Finally, pick the corruption with the lowest JSD between the sparring policy on
     # the original and corrupted position.
@@ -366,7 +372,10 @@ def get_best_corruption_2(
     )
     score = score.item()
     idx = idx.item()
-    if score > 0.2:
+    # if score > 0.2:
+    #     # If our score is too bad, we skip this board
+    #     return None
+    if score > 0.3:
         # If our score is too bad, we skip this board
         return None
     return corruptions[idx]
