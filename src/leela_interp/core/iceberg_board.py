@@ -25,6 +25,20 @@ FONTS = ["Monaco", "DejaVu Sans Mono"]
 def palette(
     values: np.ndarray, cmap="viridis", zero_center=False, upper_ratio: float = 1.0
 ):
+    """Generate a color palette for visualizing numeric values.
+    
+    Args:
+        values: Array of numeric values to map to colors
+        cmap: Matplotlib colormap name (default: 'viridis')
+        zero_center: If True, center the color scale at zero
+        upper_ratio: Ratio of the upper bound to use for scaling (default: 1.0)
+    
+    Returns:
+        tuple: (list of hex color strings, ScalarMappable object)
+    
+    Raises:
+        TypeError: If values is not a numpy array
+    """
     if not isinstance(values, np.ndarray):
         raise TypeError("values must be a numpy array")
     if zero_center:
@@ -45,6 +59,25 @@ CHESS_NAME_TO_SQUARE = {chess.square_name(i): chess.Square(i) for i in range(64)
 
 
 class IcebergBoardExtended(ice.DrawableWithChild):
+    """Extended chess board visualization with arrow labels and additional features.
+    
+    This class extends the basic IcebergBoard with support for arrow labels,
+    attention maps, and enhanced visual elements. It inherits from iceberg's
+    DrawableWithChild to provide rendering capabilities.
+    
+    Attributes:
+        board: Chess board position
+        heatmap: Optional heatmap data for square coloring
+        next_moves: Moves to highlight with arrows
+        highlight: Square to highlight
+        caption: Optional caption text
+        cmap: Colormap name for heatmap
+        mappable: Optional pre-computed color mapping
+        zero_center: Whether to center colormap at zero
+        arrows: Custom arrows with colors
+        attn_map: Attention map data for visualization
+        show_lastmove: Whether to highlight the last move
+    """
     board: chess.Board
     heatmap: np.ndarray | torch.Tensor | list[str] | dict[str, str | float] | None = (
         None
@@ -61,6 +94,12 @@ class IcebergBoardExtended(ice.DrawableWithChild):
     show_lastmove: bool = True
 
     def setup(self):
+        """Initialize and configure the chess board visualization.
+        
+        This method processes heatmap data, creates arrows for moves and attention,
+        generates the SVG representation, and sets up the visual layout including
+        captions and square references.
+        """
         fill = {}
         arrows = []
         arrow_labels = []  # New list to store arrow labels
@@ -218,6 +257,15 @@ class IcebergBoardExtended(ice.DrawableWithChild):
         return self._squares[square]
 
     def add_arrow_labels(self, svg_string, arrow_labels):
+        """Add text labels to arrows in the SVG.
+        
+        Args:
+            svg_string: SVG string to modify
+            arrow_labels: List of (from_square, to_square, label) tuples
+        
+        Returns:
+            str: Modified SVG string with arrow labels added
+        """
         # Parse the SVG string
         root = ET.fromstring(svg_string)
 
@@ -240,6 +288,26 @@ class IcebergBoardExtended(ice.DrawableWithChild):
 
 
 class IcebergBoard(ice.DrawableWithChild):
+    """Chess board visualization with heatmaps and arrows.
+    
+    This class provides a comprehensive chess board visualization system that can
+    display heatmaps, arrows, highlights, and other visual elements. It's designed
+    to work with the iceberg drawing library and supports various data formats
+    for heatmaps and move visualization.
+    
+    Attributes:
+        board: Chess board position to display
+        heatmap: Optional heatmap data (numpy array, tensor, list, or dict)
+        next_moves: Moves to display with arrows (string or list)
+        highlight: Square to highlight with special styling
+        caption: Optional text caption below the board
+        cmap: Matplotlib colormap name for heatmap coloring
+        mappable: Pre-computed color mapping object
+        zero_center: Whether to center the colormap at zero
+        arrows: Custom arrows with specified colors
+        attn_map: Attention map data for neural network visualization
+        show_lastmove: Whether to highlight the last move played
+    """
     board: chess.Board
     heatmap: np.ndarray | torch.Tensor | list[str] | dict[str, str | float] | None = (
         None
@@ -256,6 +324,12 @@ class IcebergBoard(ice.DrawableWithChild):
     show_lastmove: bool = True
 
     def setup(self):
+        """Initialize and render the chess board visualization.
+        
+        This method processes all the visualization data (heatmaps, arrows, highlights),
+        creates the SVG representation using the chess library, adds visual elements
+        like captions and square overlays, and sets up the final drawable child.
+        """
         fill = {}
         arrows = []
 
@@ -409,12 +483,27 @@ class IcebergBoard(ice.DrawableWithChild):
         self.set_child(child)
 
     def square(self, square: chess.Square | str) -> ice.Rectangle:
+        """Get the visual rectangle element for a chess square.
+        
+        Args:
+            square: Chess square as Square object or string notation (e.g., 'e4')
+        
+        Returns:
+            ice.Rectangle: Visual rectangle element corresponding to the square
+        """
         if isinstance(square, str):
             square = chess.parse_square(square)
         return self._squares[square]
 
     def save_svg(self, filename):
-        """Save the chess board as an SVG file."""
+        """Save the chess board as an SVG file.
+        
+        Args:
+            filename: Path where to save the SVG file
+            
+        Raises:
+            AttributeError: If setup() hasn't been called yet
+        """
         if not hasattr(self, 'svg_string'):
             raise AttributeError("SVG string not available. Make sure setup() has been called.")
         

@@ -1,3 +1,17 @@
+"""Double Branch Study Module.
+
+This module provides the DoubleBranchStudy class for analyzing chess puzzles that have
+two distinct solution branches. It extends the GeneralStudy class to handle puzzles
+where the neural network can choose between two different but equally valid move
+sequences to achieve the same objective.
+
+The module includes functionality for:
+- Detecting and validating double-branch puzzles
+- Analyzing residual stream effects for both branches
+- Plotting attention patterns and effects across layers
+- Computing possibility indices for different move patterns
+"""
+
 import string
 import torch
 import numpy as np
@@ -30,7 +44,28 @@ from tqdm import tqdm
 from leela_interp.core.general_study import GeneralStudy
 
 class DoubleBranchStudy(GeneralStudy):
+    """Study class for analyzing chess puzzles with two distinct solution branches.
+    
+    This class extends GeneralStudy to handle puzzles where the neural network
+    can choose between two different but equally valid move sequences. It provides
+    methods for analyzing the effects of interventions on both branches.
+    
+    Attributes:
+        all_effects_b: Effects for branch B residual stream patching
+        effect_sets_b: Dictionary of effect sets for branch B organized by tag and possibility
+        result_sets: Dictionary mapping possibility patterns to puzzle indices
+        result_masks: Boolean masks for different possibility patterns
+    """
+    
     def __init__(self, *args, load_sets=True, load_all=True, **kwargs):
+        """Initialize DoubleBranchStudy.
+        
+        Args:
+            *args: Variable arguments passed to parent class
+            load_sets: Whether to load puzzle and effect sets
+            load_all: Whether to load all effects and check for double branches
+            **kwargs: Keyword arguments passed to parent class
+        """
         super().__init__(*args, **kwargs, load_all=load_all)
         if load_all:
             self.load_effects_b()
@@ -42,6 +77,11 @@ class DoubleBranchStudy(GeneralStudy):
             self.load_attention_sets()
 
     def check_contains_double_branch(self):
+        """Validate that puzzle data contains required double branch columns.
+        
+        Raises:
+            ValueError: If required columns 'branch_1' or 'branch_2' are missing
+        """
         # Check if "branch_1" and "branch_2" columns exist in self.puzzles
         required_columns = ["branch_1", "branch_2"]
         missing_columns = [col for col in required_columns if col not in self.puzzles.columns]
@@ -50,6 +90,11 @@ class DoubleBranchStudy(GeneralStudy):
             raise ValueError(f"The following required columns are missing from self.puzzles: {', '.join(missing_columns)}")
         
     def load_effects_b(self):
+        """Load residual stream effects for branch B.
+        
+        Loads the saved tensor of effects for branch B from the global patching results.
+        The effects are negated when loaded to maintain consistency with the analysis framework.
+        """
         if os.path.exists(f"results/global_patching/interesting_puzzles{self.puzzlename}_residual_stream_results_b.pt"):
             self.all_effects_b = -torch.load(
                 f"results/global_patching/interesting_puzzles{self.puzzlename}_residual_stream_results_b.pt",
@@ -59,6 +104,11 @@ class DoubleBranchStudy(GeneralStudy):
             print("No residual stream results B found.")
         
     def load_effect_sets_b(self):
+        """Load effect sets for branch B organized by tag and possibility.
+        
+        Scans the global patching results directory for files matching the pattern
+        for branch B results and organizes them by tag and possibility identifier.
+        """
         self.effect_sets_b = {}
         for filename in os.listdir("results/global_patching"):
             match = re.search(rf'interesting_puzzles{self.puzzlename}_([a-zA-Z])_(\d+)_residual_stream_results_b\.pt$', filename)
@@ -70,6 +120,14 @@ class DoubleBranchStudy(GeneralStudy):
                     self.effect_sets_b[tag][possibility] = torch.load(f)
 
     def export_puzzle_set_info_b(self, tag='b'):
+        """Export puzzle set information including branch B results.
+        
+        Saves puzzle data, attention results, and both branch A and B residual stream
+        results for each possibility pattern to separate files.
+        
+        Args:
+            tag: Tag identifier for the export (default 'b')
+        """
         tag = 's' if hasattr(self, 'include_starting') and self.include_starting else tag
         for (possibility, idx_list), mask in zip(self.result_sets.items(), self.result_masks):
             with open(f"puzzles/interesting_puzzles{self.puzzlename}_{tag}_{possibility}.pkl", "wb") as f:
@@ -83,6 +141,21 @@ class DoubleBranchStudy(GeneralStudy):
 
     @staticmethod
     def check_if_double_branch(model, puzzles_original, must_include_pv=True, end: int = 3, min_prob: float | list[float] = 0.1):
+        """Check if puzzles have double branch structure and extract branch information.
+        
+        Analyzes puzzles to identify those with two distinct solution branches,
+        extracting the move sequences and probabilities for each branch.
+        
+        Args:
+            model: The neural network model to analyze
+            puzzles_original: DataFrame of original puzzles
+            must_include_pv: Whether the principal variation must be included in branches
+            end: Maximum depth to analyze (default 3)
+            min_prob: Minimum probability threshold for moves
+            
+        Returns:
+            DataFrame with added columns for branch_1, branch_2, and their probabilities
+        """
 
         puzzles = puzzles_original.copy()
 
@@ -97,7 +170,18 @@ class DoubleBranchStudy(GeneralStudy):
         #print(alt_puzzle_movesets)
 
         def get_moves_probs(depth, end, moves, is_branch_1, branch_1_moves, branch_1_probs, branch_2_moves, branch_2_probs):
-
+            """Recursively extract moves and probabilities for each branch.
+            
+            Args:
+                depth: Current depth in the move tree
+                end: Maximum depth to explore
+                moves: Dictionary of moves at current depth
+                is_branch_1: Boolean indicating if we're processing branch 1
+                branch_1_moves: List to store branch 1 moves
+                branch_1_probs: List to store branch 1 probabilities
+                branch_2_moves: List to store branch 2 moves
+                branch_2_probs: List to store branch 2 probabilities
+            """
             if depth == end:
                 return
 
@@ -163,6 +247,15 @@ class DoubleBranchStudy(GeneralStudy):
         return puzzles
 
     def find_result_sets(self, include_starting=False, n_examples=100):
+        """Find and organize puzzle result sets by possibility patterns.
+        
+        Groups puzzles by their possibility patterns (move sequences) and filters
+        to keep only those with sufficient examples for analysis.
+        
+        Args:
+            include_starting: Whether to include starting positions in analysis
+            n_examples: Minimum number of examples required for a set
+        """
         all_results = DoubleBranchStudy.get_possibility_indices(self.puzzles, include_starting=include_starting)
         result_sets = {k: v for k, v in all_results.items() if len(v) >= n_examples}
         result_sets = {k: v for k, v in sorted(result_sets.items(), key=lambda item: len(item[1]), reverse=True)}
@@ -175,10 +268,20 @@ class DoubleBranchStudy(GeneralStudy):
         self.n_examples = n_examples
     
     def export_puzzle_set_info(self, tag='b'):
+        """Export puzzle set information using parent class method.
+        
+        Args:
+            tag: Tag identifier for the export (default 'b')
+        """
         super().export_puzzle_set_info(tag=tag)
         
 
     def load_results(self):
+        """Load and organize puzzle results by possibility patterns.
+        
+        Loads results either from alternative puzzles or main puzzles,
+        filters for sufficient examples, and creates boolean masks for analysis.
+        """
         if self.alt_puzzles is not None:
             self.results = EffectStudy.get_possibility_indices_alt(self.main_moves)
             self.results = {k: list(np.arange(len(self.puzzles))[self.puzzles.index.isin(self.alt_puzzles.iloc[v].index)]) for k, v in self.results.items()}
@@ -192,6 +295,18 @@ class DoubleBranchStudy(GeneralStudy):
 
     @staticmethod
     def map_to_possibility(branch_1_squares, branch_2_squares):
+        """Map chess squares to possibility pattern identifiers.
+        
+        Creates a mapping from chess squares to numeric identifiers,
+        processing branch 1 squares first, then branch 2 squares.
+        
+        Args:
+            branch_1_squares: List of squares for branch 1
+            branch_2_squares: List of squares for branch 2
+            
+        Returns:
+            List of string identifiers representing the possibility pattern
+        """
         mapping = {}
         result = []
         counter = 1
@@ -211,6 +326,21 @@ class DoubleBranchStudy(GeneralStudy):
 
     @staticmethod
     def get_possibility_indices(puzzles, include_starting=False):
+        """Get indices of puzzles organized by possibility patterns.
+        
+        Analyzes puzzles to extract move patterns and groups them by
+        their possibility identifier strings.
+        
+        Args:
+            puzzles: DataFrame of puzzles with branch information
+            include_starting: Whether to include starting positions (not implemented)
+            
+        Returns:
+            Dictionary mapping possibility patterns to lists of puzzle indices
+            
+        Raises:
+            NotImplementedError: If include_starting is True
+        """
         if include_starting:
             raise NotImplementedError("Include starting not implemented")
 
@@ -231,6 +361,21 @@ class DoubleBranchStudy(GeneralStudy):
         return indices
     
     def get_effect_set_data(self, tag, possibility, verbose=False, b=False):
+        """Get effect data for a specific tag and possibility pattern.
+        
+        Processes effects for puzzles matching a specific possibility pattern,
+        organizing them by move types (candidate, follow-up, starting) and
+        square types (patching, other).
+        
+        Args:
+            tag: Tag identifier for the effect set
+            possibility: Possibility pattern string
+            verbose: Whether to print detailed information
+            b: Whether to use branch B effects
+            
+        Returns:
+            Tuple of (effects_data, non_skipped_indices)
+        """
         effects = self.effect_sets[tag][possibility] if not b else self.effect_sets_b[tag][possibility]
         include_branch = tag == "b"
         max_length = len(possibility) // (2 if include_branch else 1)
@@ -276,6 +421,24 @@ class DoubleBranchStudy(GeneralStudy):
 
     def prepare_effects_data(self, candidate_effects, follow_up_effects, starting_effects, 
                              patching_square_effects, other_effects, max_length, include_starting, verbose):
+        """Prepare effects data for visualization and analysis.
+        
+        Organizes different types of effects into a structured format suitable
+        for plotting and analysis.
+        
+        Args:
+            candidate_effects: Effects for first move candidates
+            follow_up_effects: Dictionary of effects for follow-up moves
+            starting_effects: Dictionary of effects for starting moves
+            patching_square_effects: Effects for patching squares
+            other_effects: Effects for other squares
+            max_length: Maximum sequence length
+            include_starting: Whether starting effects are included
+            verbose: Whether to print detailed information
+            
+        Returns:
+            List of dictionaries containing effects and names for each category
+        """
         candidate_effects = np.stack(candidate_effects)
         follow_up_effects = {j: np.stack(effects) if effects else np.array([]) for j, effects in follow_up_effects.items()}
         if include_starting:
@@ -315,7 +478,24 @@ class DoubleBranchStudy(GeneralStudy):
         
         return effects_data
 
-    def plot_residual_effects(self, tag, possibility, filename=None, plot_ci=True, ax=None, row_col=None, log=False, clean_plot=False, b=False):
+    def plot_residual_effects(self, tag, possibility, filename=None, plot_ci=True, plot_std=False, ax=None, row_col=None, log=False, clean_plot=False, b=False):
+        """Plot residual stream effects across layers for a specific possibility.
+        
+        Creates a line plot showing how residual stream effects vary across
+        different layers of the neural network for different move types.
+        
+        Args:
+            tag: Tag identifier for the effect set
+            possibility: Possibility pattern string
+            filename: Optional filename to save the plot
+            plot_ci: Whether to plot confidence intervals (standard error)
+            plot_std: Whether to plot standard deviation instead of confidence intervals
+            ax: Optional matplotlib axis to plot on
+            row_col: Tuple of (is_bottom_row, is_left_col, title) for subplot layout
+            log: Whether to use log scale for y-axis
+            clean_plot: Whether to use clean plot formatting
+            b: Whether to plot branch B effects
+        """
         ax_init = None if ax is None else ax
 
         branch_1_probs = np.vstack(self.puzzle_sets[tag][possibility].branch_1_probs.to_numpy())
@@ -380,7 +560,8 @@ class DoubleBranchStudy(GeneralStudy):
                 continue
             
             mean_effects = np.mean(effects, axis=0)
-            stderr_effects = np.std(effects, axis=0) / np.sqrt(len(effects))
+            std_effects = np.std(effects, axis=0)
+            stderr_effects = std_effects / np.sqrt(len(effects))
 
             ax.plot(
                 layers,
@@ -390,7 +571,17 @@ class DoubleBranchStudy(GeneralStudy):
                 linestyle=line_styles[i],
                 linewidth= 3 * fh.LINE_WIDTH,
             )
-            if plot_ci:
+            if plot_std:
+                # Plot standard deviation
+                ax.fill_between(
+                    layers,
+                    mean_effects - std_effects,
+                    mean_effects + std_effects,
+                    color=colors[i],
+                    alpha=fh.ERROR_ALPHA,
+                )
+            elif plot_ci:
+                # Plot standard error (confidence intervals)
                 ax.fill_between(
                     layers,
                     mean_effects - stderr_effects,
@@ -446,6 +637,21 @@ class DoubleBranchStudy(GeneralStudy):
             plt.show()
 
     def _plot_residual_effects_extended(self, tag, possibility, filename=None, plot_ci=True, ax=None, row_col=None, log=False, clean_plot=False):
+        """Plot residual effects with extended confidence intervals.
+        
+        Similar to plot_residual_effects but shows multiple confidence interval
+        bands for better visualization of uncertainty.
+        
+        Args:
+            tag: Tag identifier for the effect set
+            possibility: Possibility pattern string
+            filename: Optional filename to save the plot
+            plot_ci: Whether to plot confidence intervals
+            ax: Optional matplotlib axis to plot on
+            row_col: Tuple of (is_bottom_row, is_left_col, title) for subplot layout
+            log: Whether to use log scale for y-axis
+            clean_plot: Whether to use clean plot formatting
+        """
         ax_init = None if ax is None else ax
 
         branch_1_probs = np.vstack(self.puzzle_sets[tag][possibility].branch_1_probs.to_numpy())
@@ -555,7 +761,21 @@ class DoubleBranchStudy(GeneralStudy):
         if ax is None:
             plt.show()
 
-    def plot_residual_effects_grid(self, tag, possibilities, n_cols=4, filename=None, log=False):
+    def plot_residual_effects_grid(self, tag, possibilities, n_cols=4, filename=None, log=False, plot_ci=True, plot_std=False):
+        """Plot residual effects for multiple possibilities in a grid layout.
+        
+        Creates a grid of subplots, each showing residual effects for a different
+        possibility pattern.
+        
+        Args:
+            tag: Tag identifier for the effect set
+            possibilities: List of possibility pattern strings
+            n_cols: Number of columns in the grid
+            filename: Optional filename to save the plot
+            log: Whether to use log scale for y-axis
+            plot_ci: Whether to plot confidence intervals (standard error)
+            plot_std: Whether to plot standard deviation instead of confidence intervals
+        """
         n_plots = len(possibilities)
         n_rows = math.ceil(n_plots / n_cols)
         
@@ -571,7 +791,8 @@ class DoubleBranchStudy(GeneralStudy):
                     possibility=possibility,
                     ax=ax,
                     row_col=(row == n_rows - 1, col == 0, possibility),
-                    plot_ci=True,
+                    plot_ci=plot_ci,
+                    plot_std=plot_std,
                     filename=None,
                     log=log
                 )
@@ -595,6 +816,17 @@ class DoubleBranchStudy(GeneralStudy):
     
 
     def plot_attention(self, tag, possibility, vmax=0.5, filename=None):
+        """Plot attention pattern heatmap for a specific possibility.
+        
+        Creates a heatmap showing attention patterns across layers and heads,
+        with annotations for piece movement heads (Knight, Bishop, Rook).
+        
+        Args:
+            tag: Tag identifier for the attention set
+            possibility: Possibility pattern string
+            vmax: Maximum value for color scale
+            filename: Optional filename to save the plot
+        """
         # Create a single subplot
         fig, ax = plt.subplots(figsize=(3, 4))
 
@@ -638,6 +870,18 @@ class DoubleBranchStudy(GeneralStudy):
             fh.save('figures/' + filename, fig)
 
     def plot_attention_grid(self, tag, possibilities, n_cols=4, vmax=0.5, filename=None):
+        """Plot attention patterns for multiple possibilities in a grid layout.
+        
+        Creates a grid of attention heatmaps, each showing patterns for a different
+        possibility with piece movement head annotations.
+        
+        Args:
+            tag: Tag identifier for the attention set
+            possibilities: List of possibility pattern strings
+            n_cols: Number of columns in the grid
+            vmax: Maximum value for color scale
+            filename: Optional filename to save the plot
+        """
 
         n_plots = len(possibilities)
         n_rows = math.ceil(n_plots / n_cols)
@@ -690,7 +934,21 @@ class DoubleBranchStudy(GeneralStudy):
         if filename is not None:
             fh.save('figures/' + filename, fig)
 
-    def plot_residual_effects_grid_A_vs_B(self, tag, possibilities, n_cols=2, filename=None, log=False):
+    def plot_residual_effects_grid_A_vs_B(self, tag, possibilities, n_cols=2, filename=None, log=False, plot_ci=True, plot_std=False):
+        """Plot residual effects comparing branch A and B in a grid layout.
+        
+        Creates a grid with paired plots showing residual effects for both
+        branch A and branch B for each possibility pattern.
+        
+        Args:
+            tag: Tag identifier for the effect set
+            possibilities: List of possibility pattern strings
+            n_cols: Number of columns in the grid (for A plots)
+            filename: Optional filename to save the plot
+            log: Whether to use log scale for y-axis
+            plot_ci: Whether to plot confidence intervals (standard error)
+            plot_std: Whether to plot standard deviation instead of confidence intervals
+        """
         #TODO
         fix = 1
         nfix = 3 - fix
@@ -718,7 +976,8 @@ class DoubleBranchStudy(GeneralStudy):
                     possibility=possibility,
                     ax=ax_a,
                     row_col=(row == n_rows - 1, col == 0, legend_a),
-                    plot_ci=True,
+                    plot_ci=plot_ci,
+                    plot_std=plot_std,
                     filename=None,
                     log=log,
                     b=False
@@ -730,7 +989,8 @@ class DoubleBranchStudy(GeneralStudy):
                     possibility=possibility,
                     ax=ax_b,
                     row_col=(row == n_rows - 1, False, legend_b),
-                    plot_ci=True,
+                    plot_ci=plot_ci,
+                    plot_std=plot_std,
                     filename=None,
                     log=log,
                     b=True

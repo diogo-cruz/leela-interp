@@ -1,3 +1,11 @@
+"""Fifth Move Study module for analyzing chess move patterns and attention mechanisms.
+
+This module contains the FifthMoveStudy class which extends GeneralStudy to analyze
+chess positions and their effects on model predictions, with a focus on fifth move
+analysis. It provides visualization tools for residual effects and attention patterns
+across different chess scenarios.
+"""
+
 import torch
 import numpy as np
 import matplotlib.pyplot as plt
@@ -21,13 +29,38 @@ import iceberg as ice
 
 
 class FifthMoveStudy(GeneralStudy):
+    """A study class for analyzing fifth move effects in chess positions.
+    
+    This class extends GeneralStudy to provide specialized analysis of chess positions,
+    focusing on the effects of patching different squares on model predictions.
+    It includes visualization tools for residual effects and attention patterns.
+    """
     def __init__(self, *args, load_all=True, **kwargs):
+        """Initialize the FifthMoveStudy.
+        
+        Args:
+            *args: Variable length argument list passed to parent class
+            load_all (bool): Whether to load all data sets during initialization
+            **kwargs: Arbitrary keyword arguments passed to parent class
+        """
         super().__init__(*args, **kwargs, load_all=load_all)
         self.load_puzzle_sets()
         self.load_effect_sets()
         self.load_attention_sets()
 
     def get_effect_set_data(self, tag, possibility, verbose=False):
+        """Extract and process effect data for a given tag and possibility.
+        
+        Args:
+            tag (str): The tag identifier for the effect set
+            possibility (str): The possibility identifier
+            verbose (bool): Whether to print verbose output
+            
+        Returns:
+            tuple: A tuple containing (effects_data, non_skipped_indices)
+                - effects_data: List of effect dictionaries with 'effects' and 'name' keys
+                - non_skipped_indices: List of indices that were not skipped during processing
+        """
         effects = self.effect_sets[tag][possibility]
         include_starting = tag == "s"
         max_length = len(possibility) // (2 if include_starting else 1)
@@ -72,6 +105,21 @@ class FifthMoveStudy(GeneralStudy):
 
     def prepare_effects_data(self, candidate_effects, follow_up_effects, starting_effects, 
                              patching_square_effects, other_effects, max_length, include_starting, verbose):
+        """Prepare and format effects data for analysis and visualization.
+        
+        Args:
+            candidate_effects (list): List of candidate move effects
+            follow_up_effects (dict): Dictionary mapping move indices to effect lists
+            starting_effects (dict): Dictionary mapping move indices to starting square effects
+            patching_square_effects (list): List of patching square effects
+            other_effects (list): List of other effects
+            max_length (int): Maximum length of move sequences
+            include_starting (bool): Whether to include starting square effects
+            verbose (bool): Whether to print verbose output
+            
+        Returns:
+            list: List of dictionaries containing effects data with 'effects' and 'name' keys
+        """
         candidate_effects = np.stack(candidate_effects)
         follow_up_effects = {j: np.stack(effects) if effects else np.array([]) for j, effects in follow_up_effects.items()}
         if include_starting:
@@ -96,7 +144,22 @@ class FifthMoveStudy(GeneralStudy):
         
         return effects_data
 
-    def plot_residual_effects(self, tag, possibility, filename=None, plot_ci=True, ax=None, row_col=None, log=False, clean_plot=False, y_min=1e-2, y_max=8):
+    def plot_residual_effects(self, tag, possibility, filename=None, plot_ci=True, plot_std=False, ax=None, row_col=None, log=False, clean_plot=False, y_min=1e-2, y_max=8):
+        """Plot residual effects for a specific tag and possibility.
+        
+        Args:
+            tag (str): The tag identifier for the effect set
+            possibility (str): The possibility identifier
+            filename (str, optional): Filename to save the plot
+            plot_ci (bool): Whether to plot confidence intervals (50% and 90%)
+            plot_std (bool): Whether to plot standard deviation instead of confidence intervals
+            ax (matplotlib.axes.Axes, optional): Axes object to plot on
+            row_col (tuple, optional): Tuple of (is_bottom_row, is_left_col, label) for subplot positioning
+            log (bool): Whether to use logarithmic scale
+            clean_plot (bool): Whether to use clean plot styling
+            y_min (float): Minimum y-axis value
+            y_max (float): Maximum y-axis value
+        """
         ax_init = None if ax is None else ax
 
         effects_data, _ = self.get_effect_set_data(tag, possibility)
@@ -128,6 +191,7 @@ class FifthMoveStudy(GeneralStudy):
                 continue
             
             mean_effects = np.mean(effects, axis=0)
+            std_effects = 2 * np.std(effects, axis=0) / np.sqrt(len(effects))
             #stderr_effects = 2 * np.std(effects, axis=0) / np.sqrt(len(effects))
 
             ax.plot(
@@ -146,14 +210,17 @@ class FifthMoveStudy(GeneralStudy):
             #     linestyle=line_styles[i],
             #     linewidth= 3 * fh.LINE_WIDTH,
             # )
-            if plot_ci:
-                # ax.fill_between(
-                #     layers,
-                #     mean_effects - stderr_effects,
-                #     mean_effects + stderr_effects,
-                #     color=colors[i],
-                #     alpha=fh.ERROR_ALPHA,
-                # )
+            if plot_std:
+                # Plot standard deviation
+                ax.fill_between(
+                    layers,
+                    mean_effects - std_effects,
+                    mean_effects + std_effects,
+                    color=colors[i],
+                    alpha=0.3,
+                )
+            elif plot_ci:
+                # Plot confidence intervals
                 ci_50 = np.quantile(effects, [0.25, 0.75], axis=0)
                 ci_90 = np.quantile(effects, [0.05, 0.95], axis=0)
                 if not clean_plot:
@@ -206,7 +273,20 @@ class FifthMoveStudy(GeneralStudy):
         if ax is None:
             plt.show()
 
-    def plot_residual_effects_grid(self, tag, possibilities=None, n_cols=4, filename=None, log=False, y_min=1e-2, y_max=8, plot_ci=True):
+    def plot_residual_effects_grid(self, tag, possibilities=None, n_cols=4, filename=None, log=False, y_min=1e-2, y_max=8, plot_ci=True, plot_std=False):
+        """Plot a grid of residual effects for multiple possibilities.
+        
+        Args:
+            tag (str or list): The tag identifier(s) for the effect set(s)
+            possibilities (list, optional): List of possibility identifiers
+            n_cols (int): Number of columns in the grid
+            filename (str, optional): Filename to save the plot
+            log (bool): Whether to use logarithmic scale
+            y_min (float): Minimum y-axis value
+            y_max (float): Maximum y-axis value
+            plot_ci (bool): Whether to plot confidence intervals (50% and 90%)
+            plot_std (bool): Whether to plot standard deviation instead of confidence intervals
+        """
         if possibilities is None:
             multiple_tags = True
             cases = tag.copy()
@@ -228,6 +308,7 @@ class FifthMoveStudy(GeneralStudy):
                     ax=ax,
                     row_col=(row == n_rows - 1, col == 0, possibility),
                     plot_ci=plot_ci,
+                    plot_std=plot_std,
                     filename=None,
                     log=log,
                     y_min=y_min,
@@ -294,6 +375,15 @@ class FifthMoveStudy(GeneralStudy):
     #         fh.save('figures/' + filename, fig)
 
     def plot_attention_grid(self, tag, possibilities, n_cols=4, vmax=0.5, filename=None):
+        """Plot a grid of attention heatmaps for multiple possibilities.
+        
+        Args:
+            tag (str): The tag identifier for the attention set
+            possibilities (list): List of possibility identifiers
+            n_cols (int): Number of columns in the grid
+            vmax (float): Maximum value for the color scale
+            filename (str, optional): Filename to save the plot
+        """
 
         n_plots = len(possibilities)
         n_rows = math.ceil(n_plots / n_cols)
@@ -347,6 +437,18 @@ class FifthMoveStudy(GeneralStudy):
             fh.save('figures/' + filename, fig)
 
     def plot_attention_checkmate_grid(self, tag, possibilities, n_cols=4, vmax=0.5, filename=None):
+        """Plot a grid of attention heatmaps comparing checkmate vs non-checkmate positions.
+        
+        Args:
+            tag (str): The tag identifier for the attention set (must be 'n')
+            possibilities (list): List of possibility identifiers
+            n_cols (int): Number of columns in the grid
+            vmax (float): Maximum value for the color scale
+            filename (str, optional): Filename to save the plot
+            
+        Raises:
+            NotImplementedError: If tag is not 'n'
+        """
         if tag != "n":
             raise NotImplementedError("Only tag 'n' is supported for checkmate plots")
 

@@ -1,3 +1,11 @@
+"""Ablation study analysis for Leela Chess Zero interpretation.
+
+This module provides classes for analyzing ablation studies on chess positions,
+including tools for loading ablation data, plotting effects, and comparing
+performance across different interventions. It supports both standard ablation
+studies and checkmate-specific analyses.
+"""
+
 import torch
 import matplotlib.pyplot as plt
 import numpy as np
@@ -6,6 +14,18 @@ import os
 from leela_interp.core.checkmate_study import CheckmateStudy
 
 class AblationStudy:
+    """Analyzes ablation study results for chess position evaluation.
+    
+    This class loads and visualizes ablation study data, showing how different
+    interventions affect model performance on chess positions.
+    
+    Args:
+        folder_name (str): Name of the folder containing ablation results.
+        device (str): PyTorch device to use for tensor operations.
+        double_branch (bool): Whether to use double branch labeling format.
+        b (bool): Whether to use alternative '_b' suffix for files.
+    """
+    
     def __init__(self, folder_name='', device='cpu', double_branch=False, b=False):
         self.folder_name = folder_name
         self.device = device
@@ -14,6 +34,14 @@ class AblationStudy:
         fh.set()
 
     def load_ablation_data(self, double_branch=False):
+        """Load ablation data from result files.
+        
+        Loads PyTorch tensors containing ablation study results from the
+        specified folder and stores them in a dictionary.
+        
+        Args:
+            double_branch (bool): Whether to use double branch prefix formatting.
+        """
         ablation = {}
         results_path = os.path.join("results", self.folder_name)
         for file in os.listdir(results_path):
@@ -29,6 +57,18 @@ class AblationStudy:
 
     @staticmethod
     def pretty_prefix(prefix, double_branch=False):
+        """Convert file prefix to formatted display string.
+        
+        Transforms ablation file prefixes into human-readable labels
+        with proper formatting for plots.
+        
+        Args:
+            prefix (str): Original file prefix string.
+            double_branch (bool): Whether to use double branch formatting.
+            
+        Returns:
+            str: Formatted string suitable for display in plots.
+        """
         if double_branch:
             parts = prefix.split('_to_')
             if len(parts) != 2:
@@ -53,6 +93,20 @@ class AblationStudy:
             return first_number + r"$\rightarrow$" + second_number + ' target'
 
     def plot_ablation_effects(self, mask=None, verbose=False, filename=None, puzzle_set=None, LH=None, axs=None, double_branch=False):
+        """Plot ablation effects with percentile distributions.
+        
+        Creates visualizations showing the distribution of ablation effects
+        across different interventions.
+        
+        Args:
+            mask (slice, optional): Mask to apply to data selection.
+            verbose (bool): Whether to print verbose output.
+            filename (str, optional): Filename to save the plot.
+            puzzle_set (str, optional): Puzzle set identifier for title.
+            LH (str, optional): Left-hand side label for title.
+            axs (matplotlib.axes, optional): Existing axes to plot on.
+            double_branch (bool): Whether to use double branch coloring.
+        """
         if mask is None:
             mask = slice(None)
 
@@ -107,6 +161,19 @@ class AblationStudy:
 
     @staticmethod
     def plot_ablation_effects_grid(ablation_configs, n_cols=2, filename=None, tag='', double_branch=False, b=False):
+        """Create a grid of ablation effect plots for multiple configurations.
+        
+        Generates a multi-panel plot showing ablation effects for different
+        experimental configurations side by side.
+        
+        Args:
+            ablation_configs (list): List of (case, puzzle_set) tuples.
+            n_cols (int): Number of columns in the grid layout.
+            filename (str, optional): Base filename for saving plots.
+            tag (str): Additional tag to append to folder names.
+            double_branch (bool): Whether to use double branch analysis.
+            b (bool): Whether to use alternative '_b' suffix.
+        """
         n_rows = (len(ablation_configs) + n_cols - 1) // n_cols
         figsize = (fh.get_width(0.66)*1., 2*1.)
         figsize = (figsize[0]*n_cols, figsize[1]*n_rows)
@@ -139,6 +206,17 @@ class AblationStudy:
 
     @staticmethod
     def word_to_number(word):
+        """Convert ordinal word to numeric string.
+        
+        Converts ordinal words like 'first', 'second', etc. to their
+        corresponding numeric representations.
+        
+        Args:
+            word (str): Ordinal word to convert.
+            
+        Returns:
+            str: Numeric string representation, or None if word not found.
+        """
         ordinal_dict = {
             'first': 1, 'second': 2, 'third': 3, 'fourth': 4, 'fifth': 5,
             'sixth': 6, 'seventh': 7, 'eighth': 8, 'ninth': 9, 'tenth': 10,
@@ -149,6 +227,20 @@ class AblationStudy:
         return str(ordinal_dict.get(word.lower(), None))
     
 class AblationCheckmateStudy(AblationStudy):
+    """Specialized ablation study for checkmate puzzle analysis.
+    
+    Extends AblationStudy to focus on checkmate-specific analyses,
+    integrating with CheckmateStudy for puzzle classification and filtering.
+    
+    Args:
+        folder_name (str): Name of the folder containing ablation results.
+        device (str): PyTorch device to use for tensor operations.
+        puzzlename (str): Name of the puzzle set to analyze.
+        load_all (bool): Whether to load all puzzle data.
+        double_branch (bool): Whether to use double branch labeling format.
+        b (bool): Whether to use alternative '_b' suffix for files.
+    """
+    
     def __init__(self, folder_name='', device='cpu', puzzlename='', load_all=False, double_branch=False, b=False):
         self.folder_name = folder_name
         self.device = device
@@ -161,6 +253,14 @@ class AblationCheckmateStudy(AblationStudy):
         #print(self.checkmate_study.puzzle_sets['n']['112'])
 
     def load_ablation_data(self, double_branch=False):
+        """Load ablation data for checkmate analysis.
+        
+        Loads PyTorch tensors containing ablation study results specific
+        to checkmate puzzles from the specified folder.
+        
+        Args:
+            double_branch (bool): Whether to use double branch prefix formatting.
+        """
         ablation = {}
         results_path = os.path.join("results", self.folder_name)
         for file in os.listdir(results_path):
@@ -174,6 +274,20 @@ class AblationCheckmateStudy(AblationStudy):
         self.ablation = ablation
 
     def plot_ablation_effects(self, verbose=False, filename=None, puzzle_set=None, LH=None, axs=None, mate=False, double_branch=False):
+        """Plot ablation effects filtered by checkmate status.
+        
+        Creates visualizations showing ablation effects specifically for
+        checkmate or non-checkmate positions based on puzzle themes.
+        
+        Args:
+            verbose (bool): Whether to print verbose output.
+            filename (str, optional): Filename to save the plot.
+            puzzle_set (str, optional): Puzzle set identifier for filtering.
+            LH (str, optional): Left-hand side label for title.
+            axs (matplotlib.axes, optional): Existing axes to plot on.
+            mate (bool): Whether to filter for checkmate positions.
+            double_branch (bool): Whether to use double branch coloring.
+        """
 
         n_turns = (len(puzzle_set)+1) // 2
         #print(self.checkmate_study.puzzle_sets)
@@ -242,6 +356,19 @@ class AblationCheckmateStudy(AblationStudy):
             fh.save('figures/' + filename, plt.gcf())
 
     def plot_ablation_effects_grid(self, ablation_configs, n_cols=2, filename=None, tag='', double_branch=False, b=False):
+        """Create a grid of checkmate ablation effect plots.
+        
+        Generates a multi-panel plot showing ablation effects for both
+        checkmate and non-checkmate positions across different configurations.
+        
+        Args:
+            ablation_configs (list): List of (case, puzzle_set) tuples.
+            n_cols (int): Number of columns in the grid layout.
+            filename (str, optional): Base filename for saving plots.
+            tag (str): Additional tag to append to folder names.
+            double_branch (bool): Whether to use double branch analysis.
+            b (bool): Whether to use alternative '_b' suffix.
+        """
         n_rows = (len(ablation_configs) + n_cols - 1) // (n_cols)
         figsize = (fh.get_width(0.66)*1., 2*1.)
         figsize = (figsize[0]*2*n_cols, figsize[1]*n_rows)

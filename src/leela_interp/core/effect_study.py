@@ -1,3 +1,19 @@
+"""Effect study module for analyzing chess puzzle patching effects.
+
+This module provides classes and functions for studying the effects of patching
+chess positions on neural network model predictions. It includes functionality for
+loading puzzle data, analyzing residual stream effects, attention patterns, and
+visualizing results through various plotting methods.
+
+Classes:
+    EffectStudy: Main class for analyzing patching effects on chess puzzles (deprecated)
+    AblationStudy: Class for analyzing attention head ablation effects
+
+Functions:
+    prob_to_logodds: Convert probability to log odds
+    logodds_to_prob: Convert log odds to probability
+"""
+
 import string
 import torch
 import numpy as np
@@ -29,6 +45,23 @@ from tqdm import tqdm
 import warnings
 
 class EffectStudy:
+    """Study class for analyzing patching effects on chess puzzles.
+    
+    This class provides methods to analyze how patching different squares in chess
+    positions affects model predictions. It loads puzzle data, computes effects,
+    and provides visualization tools.
+    
+    Note: This class is deprecated. Use GeneralStudy instead.
+    
+    Args:
+        model: The chess model to analyze
+        puzzlename (str): Name suffix for puzzle files
+        device (str): Device to run computations on ('cpu' or 'cuda')
+        include_starting (bool): Whether to include starting squares in analysis
+        n_examples (int): Minimum number of examples required for analysis
+        alt_puzzles (bool): Whether to load alternative puzzle configurations
+    """
+    
     def __init__(self, model, puzzlename='', device='cpu', include_starting=False, n_examples=100, alt_puzzles=False):
         # Write deprecation warning
         warnings.warn("EffectStudy is deprecated. Use GeneralStudy instead.", DeprecationWarning)
@@ -50,11 +83,22 @@ class EffectStudy:
         
 
     def load_puzzles(self):
+        """Load puzzle data from pickle file.
+        
+        Loads the main puzzle dataset from a pickle file named
+        'interesting_puzzles{puzzlename}.pkl'.
+        """
         with open(f"interesting_puzzles{self.puzzlename}.pkl", "rb") as f:
             puzzles = pickle.load(f)
         self.puzzles = puzzles
 
     def load_alt_puzzles(self):
+        """Load alternative puzzle configurations.
+        
+        Filters the main puzzle set to find puzzles suitable for alternative
+        analysis, focusing on mate-in-2 puzzles with specific move patterns
+        and double-game characteristics.
+        """
 
         diff_puzzles = self.puzzles.copy()
 
@@ -144,6 +188,11 @@ class EffectStudy:
         self.alt_mask = self.puzzles.index.isin(self.alt_puzzles.index)
 
     def load_effects(self):
+        """Load residual stream patching effects from saved results.
+        
+        Attempts to load pre-computed residual stream effects from a PyTorch
+        file. Effects are negated for analysis purposes.
+        """
         if os.path.exists(f"results/global_patching/interesting_puzzles{self.puzzlename}_residual_stream_results.pt"):
             self.all_effects = -torch.load(
                 f"results/global_patching/interesting_puzzles{self.puzzlename}_residual_stream_results.pt",
@@ -153,6 +202,10 @@ class EffectStudy:
             print("No residual stream results found.")
 
     def load_attentions(self):
+        """Load attention head patching effects from saved results.
+        
+        Attempts to load pre-computed attention head effects from a PyTorch file.
+        """
         if os.path.exists(f"results/global_patching/interesting_puzzles{self.puzzlename}_attention_head_results.pt"):
             self.all_attentions = torch.load(
                 f"results/global_patching/interesting_puzzles{self.puzzlename}_attention_head_results.pt",
@@ -162,9 +215,18 @@ class EffectStudy:
             print("No attention head results found.")
         
     def load_ratings(self):
+        """Load puzzle difficulty ratings.
+        
+        Extracts the 'Rating' column from the puzzle dataset as a numpy array.
+        """
         self.puzzle_ratings = self.puzzles["Rating"].to_numpy()
 
     def load_results(self):
+        """Process puzzle data to create result indices.
+        
+        Creates mappings from move possibilities to puzzle indices, filtering
+        to keep only possibilities with sufficient examples.
+        """
         if self.alt_puzzles is not None:
             self.results = EffectStudy.get_possibility_indices_alt(self.main_moves)
             self.results = {k: list(np.arange(len(self.puzzles))[self.puzzles.index.isin(self.alt_puzzles.iloc[v].index)]) for k, v in self.results.items()}
@@ -177,10 +239,27 @@ class EffectStudy:
             self.good_mask[i, idx_list] = True
 
     def export_puzzles(self, filename):
+        """Export selected puzzles to a pickle file.
+        
+        Args:
+            filename (str): Name of the puzzle set to export
+        """
         with open(f"interesting_puzzles_{filename}.pkl", "wb") as f:
             pickle.dump(self.puzzles.iloc[self.good_results[filename]], f)
 
     def get_effects_data(self, mask=None, allowed_lengths=list(range(3, 17)), rating_range=(0, 5000), verbose=False):
+        """Extract and organize patching effects data.
+        
+        Args:
+            mask (np.ndarray, optional): Boolean mask for puzzle selection
+            allowed_lengths (list): List of allowed puzzle lengths
+            rating_range (tuple): Min and max rating range (min_rating, max_rating)
+            verbose (bool): Whether to print diagnostic information
+            
+        Returns:
+            tuple: (effects_data, non_skipped) where effects_data is a list of
+                  effect dictionaries and non_skipped is a list of included indices
+        """
         include_starting = self.include_starting
         include_alt = self.alt_puzzles is not None
         apply_mask = self.apply_mask
@@ -386,6 +465,11 @@ class EffectStudy:
         return effects_data, non_skipped
 
     def plot_rating_histogram(self, filename=None):
+        """Plot histogram of puzzle ratings.
+        
+        Args:
+            filename (str, optional): Path to save the figure
+        """
 
         fig = plt.figure()
         plt.hist(self.puzzle_ratings, bins=30)
@@ -398,6 +482,15 @@ class EffectStudy:
             fh.save(filename, fig)
 
     def plot_examples(self, mask=None, n=5):
+        """Plot example puzzles with their patching effects.
+        
+        Args:
+            mask (np.ndarray, optional): Boolean mask for puzzle selection
+            n (int): Number of examples to plot
+            
+        Returns:
+            ice.Arrange: Arranged plot of puzzle examples
+        """
         if mask is None:
             mask = np.ones(len(self.puzzles), dtype=bool)
 
@@ -439,7 +532,21 @@ class EffectStudy:
 
         return ice.Arrange(plots, gap=10, arrange_direction=ice.Arrange.Direction.VERTICAL)
 
-    def plot_residual_effects(self, mask=None, save_path=None, allowed_lengths=[3, 4, 5, 6, 7], apply_mask=True, rating_range=(0, 3000), plot_ci=True, ax=None, row_col=None, log=False):
+    def plot_residual_effects(self, mask=None, save_path=None, allowed_lengths=[3, 4, 5, 6, 7], apply_mask=True, rating_range=(0, 3000), plot_ci=True, plot_std=False, ax=None, row_col=None, log=False):
+        """Plot residual stream patching effects by layer.
+        
+        Args:
+            mask (np.ndarray, optional): Boolean mask for puzzle selection
+            save_path (str, optional): Path to save the figure
+            allowed_lengths (list): List of allowed puzzle lengths
+            apply_mask (bool): Whether to apply masking logic
+            rating_range (tuple): Min and max rating range
+            plot_ci (bool): Whether to plot confidence intervals (50% and 90%)
+            plot_std (bool): Whether to plot standard deviation instead of confidence intervals
+            ax (matplotlib.axes.Axes, optional): Axes to plot on
+            row_col (tuple, optional): Grid position information
+            log (bool): Whether to use log scale for y-axis
+        """
         if mask is None:
             mask = np.ones(len(self.puzzles), dtype=bool)
 
@@ -476,6 +583,7 @@ class EffectStudy:
                 effects = np.abs(effects)
                 #pass
             mean_effects = np.mean(effects, axis=0)
+            std_effects = np.std(effects, axis=0)
             
             # Calculate confidence intervals
             if plot_ci:
@@ -492,7 +600,17 @@ class EffectStudy:
                 linestyle=line_styles[i],
                 linewidth= 3 * fh.LINE_WIDTH,
             )
-            if plot_ci:
+            if plot_std:
+                # Plot standard deviation
+                ax.fill_between(
+                    layers,
+                    mean_effects - std_effects,
+                    mean_effects + std_effects,
+                    color=colors[i],
+                    alpha=0.3,
+                )
+            elif plot_ci:
+                # Plot confidence intervals
                 ax.fill_between(
                     layers,
                     ci_90[0],
@@ -538,6 +656,14 @@ class EffectStudy:
             plt.show()
 
     def allowed_possibilities_mask(self, allowed_lengths=[3, 4, 5, 6, 7]):
+        """Create mask for possibilities with allowed lengths.
+        
+        Args:
+            allowed_lengths (list): List of allowed puzzle lengths
+            
+        Returns:
+            np.ndarray: Boolean mask for allowed possibilities
+        """
         mask = np.zeros(len(self.good_results), dtype=bool)
         for idx, possibility in enumerate(self.good_results):
             n_moves = len(possibility) // (2 if self.include_starting or self.alt_puzzles is not None else 1)
@@ -545,7 +671,18 @@ class EffectStudy:
                 mask[idx] = True
         return mask
 
-    def plot_residual_effects_grid(self, n_cols=4, allowed_lengths=[3, 4, 5, 6, 7], rating_range=(0, 5000), filename=None, log=False):
+    def plot_residual_effects_grid(self, n_cols=4, allowed_lengths=[3, 4, 5, 6, 7], rating_range=(0, 5000), filename=None, log=False, plot_ci=True, plot_std=False):
+        """Plot residual effects in a grid layout for different possibilities.
+        
+        Args:
+            n_cols (int): Number of columns in the grid
+            allowed_lengths (list): List of allowed puzzle lengths
+            rating_range (tuple): Min and max rating range
+            filename (str, optional): Path to save the figure
+            log (bool): Whether to use log scale for y-axis
+            plot_ci (bool): Whether to plot confidence intervals (50% and 90%)
+            plot_std (bool): Whether to plot standard deviation instead of confidence intervals
+        """
         possibilities_mask = self.allowed_possibilities_mask(allowed_lengths)
         n_plots = np.sum(possibilities_mask)
         n_rows = math.ceil(n_plots / n_cols)
@@ -572,7 +709,8 @@ class EffectStudy:
                     rating_range=rating_range,
                     ax=ax,
                     row_col=(True if row == n_rows - 1 else False, True if col == 0 else False, possibility),
-                    plot_ci=True,
+                    plot_ci=plot_ci,
+                    plot_std=plot_std,
                     save_path=None,
                     log=log
                 )
@@ -593,6 +731,13 @@ class EffectStudy:
         
 
     def plot_rating(self, mask=None, save_path=None, allowed_lengths=[3, 4, 5, 6, 7]):
+        """Plot patching effects vs puzzle rating.
+        
+        Args:
+            mask (np.ndarray, optional): Boolean mask for puzzle selection
+            save_path (str, optional): Path to save the figure
+            allowed_lengths (list): List of allowed puzzle lengths
+        """
         if mask is None:
             mask = np.ones(len(self.puzzles), dtype=bool)
 
@@ -652,6 +797,13 @@ class EffectStudy:
         plt.show()
 
     def plot_rating_layer(self, mask=None, save_path=None, allowed_lengths=[3, 4, 5, 6, 7]):
+        """Plot layer of maximum effect vs puzzle rating.
+        
+        Args:
+            mask (np.ndarray, optional): Boolean mask for puzzle selection
+            save_path (str, optional): Path to save the figure
+            allowed_lengths (list): List of allowed puzzle lengths
+        """
         if mask is None:
             mask = np.ones(len(self.puzzles), dtype=bool)
 
@@ -713,6 +865,13 @@ class EffectStudy:
         plt.show()
 
     def plot_rating_grid(self, n_cols=4, allowed_lengths=[3, 4, 5, 6, 7], filename=None):
+        """Plot rating effects in a grid layout for different possibilities.
+        
+        Args:
+            n_cols (int): Number of columns in the grid
+            allowed_lengths (list): List of allowed puzzle lengths
+            filename (str, optional): Path to save the figure
+        """
         n_plots = len(self.good_results)
         n_rows = (n_plots + n_cols - 1) // n_cols
 
@@ -770,6 +929,13 @@ class EffectStudy:
             fh.save(filename, fig)
 
     def plot_rating_layer_grid(self, n_cols=4, allowed_lengths=[3, 4, 5, 6, 7], filename=None):
+        """Plot rating vs layer effects in a grid layout for different possibilities.
+        
+        Args:
+            n_cols (int): Number of columns in the grid
+            allowed_lengths (list): List of allowed puzzle lengths
+            filename (str, optional): Path to save the figure
+        """
         n_plots = len(self.good_results)
         n_rows = (n_plots + n_cols - 1) // n_cols
 
@@ -827,6 +993,16 @@ class EffectStudy:
             fh.save(filename, fig)
 
     def plot_attention_grid(self, allowed_lengths=[3, 4, 5, 6, 7], n_cols=4, vmax=0.5, topk=5, rating_range=None, filename=None):
+        """Plot attention head effects in a grid layout.
+        
+        Args:
+            allowed_lengths (list): List of allowed puzzle lengths
+            n_cols (int): Number of columns in the grid
+            vmax (float): Maximum value for color scaling
+            topk (int): Number of top heads to track
+            rating_range (tuple, optional): Min and max rating range
+            filename (str, optional): Path to save the figure
+        """
 
         if rating_range is not None:
             rating_mask = np.array((self.puzzles["Rating"] >= rating_range[0]) & (self.puzzles["Rating"] <= rating_range[1]))
@@ -918,6 +1094,14 @@ class EffectStudy:
         self.best_heads = best_heads
 
     def plot_attention(self, pos, index, vmax=0.5, filename=None):
+        """Plot attention effects for a specific position.
+        
+        Args:
+            pos (int): Position index to analyze
+            index (int): Index in the good_results
+            vmax (float): Maximum value for color scaling
+            filename (str, optional): Path to save the figure
+        """
         # Create a single subplot
         fig, ax = plt.subplots(figsize=(3, 4))
 
@@ -969,6 +1153,14 @@ class EffectStudy:
 
     @staticmethod
     def map_to_possibility(moves):
+        """Map a sequence of moves to a possibility string.
+        
+        Args:
+            moves (list): List of move strings
+            
+        Returns:
+            list: List of mapped possibility strings
+        """
         mapping = {}
         result = []
         counter = 1
@@ -981,7 +1173,17 @@ class EffectStudy:
         
         return result
 
+    @staticmethod
     def map_to_possibility_alt(correct_squares, incorrect_squares):
+        """Map correct and incorrect squares to possibility strings.
+        
+        Args:
+            correct_squares (list): List of correct square moves
+            incorrect_squares (list): List of incorrect square moves
+            
+        Returns:
+            list: List of mapped possibility strings
+        """
         mapping = {}
         result = []
         counter = 1
@@ -1001,6 +1203,15 @@ class EffectStudy:
 
     @staticmethod
     def get_possibility_indices(puzzles, include_starting=False):
+        """Get indices of puzzles grouped by move possibilities.
+        
+        Args:
+            puzzles (pd.DataFrame): DataFrame of puzzle data
+            include_starting (bool): Whether to include starting squares
+            
+        Returns:
+            dict: Dictionary mapping possibility strings to puzzle indices
+        """
         possibilities = []
         indices = {}
 
@@ -1021,6 +1232,14 @@ class EffectStudy:
 
     @staticmethod
     def get_possibility_indices_alt(main_moves):
+        """Get indices of puzzles grouped by alternative move possibilities.
+        
+        Args:
+            main_moves (list): List of (correct_branch, incorrect_branch) tuples
+            
+        Returns:
+            dict: Dictionary mapping possibility strings to puzzle indices
+        """
         possibilities = []
         indices = {}
 
@@ -1037,6 +1256,15 @@ class EffectStudy:
 
     @staticmethod
     def check_no_common_elements(list_of_sublists, ignore_even=False):
+        """Check if sublists have no common elements.
+        
+        Args:
+            list_of_sublists (list): List of sublists to check
+            ignore_even (bool): Whether to ignore even-indexed sublists
+            
+        Returns:
+            bool: True if no common elements found, False otherwise
+        """
         # Convert each sublist to a set
         set_list = [set(list_of_sublists[0]), set(list_of_sublists[1])] + [set(sublist) for i, sublist in enumerate(list_of_sublists[2:]) if i % 2 != 0 or not ignore_even]
         
@@ -1049,6 +1277,11 @@ class EffectStudy:
         return True  # No common elements found
 
     def create_head_to_possibilities_dict(self):
+        """Create dictionary mapping attention heads to their top possibilities.
+        
+        Creates a mapping from attention head coordinates to the possibilities
+        where they have the highest effects, sorted by effect strength.
+        """
         head_to_possibilities = {}
         for possibility, heads in self.best_heads.items():
             for head, effect in heads:
@@ -1067,6 +1300,11 @@ class EffectStudy:
         self.head_to_possibilities = sorted_dict
 
     def create_head_to_possibilities_dict_with_effects(self):
+        """Create dictionary mapping attention heads to possibilities with effect values.
+        
+        Similar to create_head_to_possibilities_dict but includes effect values
+        in the output.
+        """
         head_to_possibilities = {}
         for possibility, heads in self.best_heads.items():
             for head, effect in heads:
@@ -1084,6 +1322,11 @@ class EffectStudy:
         self.head_to_possibilities_with_effects = sorted_dict
 
     def plot_attention_effects(self, mask=None):
+        """Plot mean attention effects across all heads and layers.
+        
+        Args:
+            mask (np.ndarray, optional): Boolean mask for puzzle selection
+        """
         if mask is None:
             mask = np.ones(len(self.all_attentions), dtype=bool)
         effects = self.all_attentions[mask]
@@ -1100,12 +1343,27 @@ class EffectStudy:
 
 
 class AblationStudy:
+    """Study class for analyzing attention head ablation effects.
+    
+    This class loads and analyzes the effects of ablating specific attention
+    heads on model performance, providing visualization tools for the results.
+    
+    Args:
+        folder_name (str): Name of the folder containing ablation results
+        device (str): Device to run computations on ('cpu' or 'cuda')
+    """
+    
     def __init__(self, folder_name='L12H17', device='cpu'):
         self.folder_name = folder_name
         self.device = device
         self.load_ablation_data()
 
     def load_ablation_data(self):
+        """Load ablation data from result files.
+        
+        Loads PyTorch files containing ablation results from the specified
+        folder, organizing them by their filename prefixes.
+        """
         ablation = {}
         for file in os.listdir("results/" + self.folder_name):
             if file.endswith("_ablation.pt"):
@@ -1120,6 +1378,14 @@ class AblationStudy:
 
     @staticmethod
     def pretty_prefix(prefix):
+        """Convert filename prefix to pretty-printed label.
+        
+        Args:
+            prefix (str): Underscore-separated prefix string
+            
+        Returns:
+            str: Pretty-printed label with arrows and formatting
+        """
         prefixes = prefix.split("_")
         if len(prefixes) == 3:
             first_number, _, second_number = prefixes
@@ -1136,6 +1402,15 @@ class AblationStudy:
         return first_number + char_1 + r"$\to$" + second_number + char_2 + ' target'
 
     def plot_ablation_effects(self, mask=None, verbose=False, filename=None, puzzle_set=None, LH=None):
+        """Plot ablation effects using percentile visualization.
+        
+        Args:
+            mask (slice or np.ndarray, optional): Mask for data selection
+            verbose (bool): Whether to print verbose output
+            filename (str, optional): Path to save the figure
+            puzzle_set (str, optional): Name of puzzle set for title
+            LH (str, optional): Layer/head information for title
+        """
         if mask is None:
             mask = slice(None)
 
@@ -1180,6 +1455,13 @@ class AblationStudy:
 
     @staticmethod
     def plot_ablation_effects_grid(ablation_configs, n_cols=2, filename=None):
+        """Plot ablation effects in a grid layout for multiple configurations.
+        
+        Args:
+            ablation_configs (list): List of (cases, puzzle_set) tuples
+            n_cols (int): Number of columns in the grid
+            filename (str, optional): Path to save the figure
+        """
         n_rows = (len(ablation_configs) + n_cols - 1) // n_cols
         fig, axes = plt.subplots(n_rows, n_cols, figsize=(fh.TEXT_WIDTH, n_rows * 4))
         axes = axes.flatten()
@@ -1207,6 +1489,14 @@ class AblationStudy:
 
     @staticmethod
     def word_to_number(word):
+        """Convert ordinal word to number string.
+        
+        Args:
+            word (str): Ordinal word (e.g., 'first', 'second')
+            
+        Returns:
+            str: Number string or None if not found
+        """
         ordinal_dict = {
             'first': 1, 'second': 2, 'third': 3, 'fourth': 4, 'fifth': 5,
             'sixth': 6, 'seventh': 7, 'eighth': 8, 'ninth': 9, 'tenth': 10,
@@ -1217,7 +1507,23 @@ class AblationStudy:
         return str(ordinal_dict.get(word.lower(), None))
 
 def prob_to_logodds(prob):
+    """Convert probability to log odds.
+    
+    Args:
+        prob (float or np.ndarray): Probability value(s) between 0 and 1
+        
+    Returns:
+        float or np.ndarray: Log odds value(s)
+    """
     return np.log(prob / (1 - prob))
 
 def logodds_to_prob(logodds):
+    """Convert log odds to probability.
+    
+    Args:
+        logodds (float or np.ndarray): Log odds value(s)
+        
+    Returns:
+        float or np.ndarray: Probability value(s) between 0 and 1
+    """
     return 1 / (1 + np.exp(-logodds))

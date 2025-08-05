@@ -1,3 +1,10 @@
+"""NNsight wrapper for Leela Chess Zero model.
+
+This module provides a wrapper around the Leela Chess Zero model to make it
+compatible with the nnsight library for neural network introspection and
+interpretability analysis.
+"""
+
 import torch
 from leela_interp.core.lc0 import Lc0Model
 from leela_interp.core.leela_board import LeelaBoard
@@ -19,6 +26,12 @@ class Lc0sight(NNsight):
     """
 
     def __init__(self, path=None, device=None):
+        """Initialize the Lc0sight model wrapper.
+        
+        Args:
+            path (str, optional): Path to the ONNX model file. If None, uses default.
+            device (str, optional): Device to run the model on (e.g., 'cuda', 'cpu').
+        """
         model = Lc0Model(onnx_model_path=path, device=device)
         super().__init__(model)
         self._layers = [{} for _ in range(self._model.N_LAYERS)]
@@ -41,9 +54,27 @@ class Lc0sight(NNsight):
 
     @property
     def device(self):
+        """Get the device the model is running on.
+        
+        Returns:
+            torch.device: The device (CPU/GPU) the model is on.
+        """
         return self._model.device
 
     def trace(self, *args, grads: bool = False, **kwargs):
+        """Trace the model execution with nnsight.
+        
+        Args:
+            *args: Variable length argument list passed to parent trace method.
+            grads (bool, optional): Whether to compute gradients. Defaults to False.
+            **kwargs: Arbitrary keyword arguments passed to parent trace method.
+            
+        Returns:
+            The result of the parent trace method.
+            
+        Raises:
+            ValueError: If grads is passed in invoker_args instead of as direct parameter.
+        """
         if "invoker_args" not in kwargs:
             kwargs["invoker_args"] = {}
         if "grads" in kwargs["invoker_args"]:
@@ -54,12 +85,34 @@ class Lc0sight(NNsight):
         return super().trace(*args, **kwargs, scan=False, validate=False)
 
     def _execute(self, *prepared_inputs, **kwargs) -> torch.Tensor:
+        """Execute the model with prepared inputs.
+        
+        Args:
+            *prepared_inputs: Prepared input tensors for the model.
+            **kwargs: Additional keyword arguments for model execution.
+            
+        Returns:
+            torch.Tensor: Model output logits.
+        """
         return self._model(
             *prepared_inputs,
             **kwargs,
         )
 
     def _prepare_inputs(self, *inputs, grads=False, **kwargs) -> tuple[tuple, int]:
+        """Prepare inputs for model execution.
+        
+        Args:
+            *inputs: Input data - either torch.Tensor or LeelaBoard objects.
+            grads (bool, optional): Whether to enable gradients. Defaults to False.
+            **kwargs: Additional keyword arguments.
+            
+        Returns:
+            tuple[tuple, int]: Tuple containing (prepared_inputs, batch_size).
+            
+        Raises:
+            AssertionError: If number of inputs is not exactly 1.
+        """
         assert len(inputs) == 1
         if isinstance(inputs[0], torch.Tensor):
             return inputs, len(inputs[0])
@@ -78,6 +131,11 @@ class Lc0sight(NNsight):
 
     @property
     def layers(self):
+        """Get the layers of the model for introspection.
+        
+        Returns:
+            list: List of dictionaries containing layer modules.
+        """
         return self._layers
 
     def attention_scores(
@@ -87,6 +145,17 @@ class Lc0sight(NNsight):
         QK_only: bool = False,
         smolgen_only: bool = False,
     ):
+        """Get attention scores from a specific layer.
+        
+        Args:
+            layer (int): Layer index to get attention scores from.
+            pre_softmax (bool, optional): If True, return pre-softmax weights. Defaults to False.
+            QK_only (bool, optional): If True, return only QK scores. Defaults to False.
+            smolgen_only (bool, optional): If True, return only smolgen output. Defaults to False.
+            
+        Returns:
+            torch.Tensor: Attention scores based on the specified parameters.
+        """
         if pre_softmax:
             return self.layers[layer]["smolgen_weights"]
         elif QK_only:
@@ -96,14 +165,39 @@ class Lc0sight(NNsight):
         return self.layers[layer]["mha/QK/softmax"]
 
     def residual_stream(self, layer: int, pre_mlp: bool = False):
+        """Get the residual stream from a specific layer.
+        
+        Args:
+            layer (int): Layer index to get residual stream from.
+            pre_mlp (bool, optional): If True, return pre-MLP residual stream. Defaults to False.
+            
+        Returns:
+            torch.Tensor: Residual stream tensor from the specified layer.
+        """
         if pre_mlp:
             return self._lc0_model.post_attention[layer]
         return self._lc0_model.post_mlp[layer]
 
     def mlp_output(self, layer: int):
+        """Get the MLP output from a specific layer.
+        
+        Args:
+            layer (int): Layer index to get MLP output from.
+            
+        Returns:
+            torch.Tensor: MLP output tensor from the specified layer.
+        """
         return self._lc0_model.mlp_output[layer]
 
     def attention_output(self, layer: int):
+        """Get the attention output from a specific layer.
+        
+        Args:
+            layer (int): Layer index to get attention output from.
+            
+        Returns:
+            torch.Tensor: Attention output tensor from the specified layer.
+        """
         return self._lc0_model.attention_output[layer]
 
     def headwise_attention_output(self, layer: int):

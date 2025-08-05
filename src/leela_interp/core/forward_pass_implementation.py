@@ -11,6 +11,31 @@ You can access the unmodified forward pass code under `LC0Model._lc0_model.code`
 
 
 def forward(self, input_1):
+    """
+    Execute the forward pass of the Leela Chess Zero neural network.
+    
+    This function implements the complete forward pass computation for the LC0 model,
+    including embedding processing, multi-head attention layers, and output head
+    computations. The implementation is based on auto-generated code from the ONNX
+    model but modified to be compatible with nnsight by exposing residual activations
+    with proper batch dimensions.
+    
+    Args:
+        input_1: Input tensor representing the chess board state and auxiliary
+                information. Expected to be a tensor that will be processed through
+                the network layers.
+    
+    Returns:
+        list: A list containing three output tensors:
+            - output_policy: Policy head output for move predictions
+            - output_wdl: Win-Draw-Loss value head output  
+            - output_mlh: Move-left head output for game length prediction
+    
+    Note:
+        This function contains the complete computational graph with all intermediate
+        operations explicitly defined. The code follows the ONNX execution pattern
+        with careful memory management (setting variables to None after use).
+    """
     ########################################################################
     # Embedding stuff
     ########################################################################

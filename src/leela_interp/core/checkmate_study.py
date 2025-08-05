@@ -1,3 +1,15 @@
+"""Checkmate study analysis module.
+
+This module provides specialized analysis tools for studying checkmate patterns in chess games
+using the Leela chess engine. It extends the FifthMoveStudy class to analyze residual effects
+and attention patterns specifically in checkmate scenarios.
+
+The module focuses on:
+- Residual effect analysis for checkmate vs non-checkmate positions
+- Attention pattern visualization for different checkmate scenarios
+- Comparative analysis of mate-in-N puzzle themes
+"""
+
 import torch
 import numpy as np
 import matplotlib.pyplot as plt
@@ -22,10 +34,42 @@ import iceberg as ice
 
 
 class CheckmateStudy(FifthMoveStudy):
+    """Specialized study class for analyzing checkmate patterns and effects.
+    
+    This class extends FifthMoveStudy to provide specific analysis tools for
+    checkmate scenarios, including residual effect plotting and attention
+    pattern visualization for mate-in-N puzzles.
+    """
+    
     def __init__(self, *args, **kwargs):
+        """Initialize CheckmateStudy with same parameters as FifthMoveStudy.
+        
+        Args:
+            *args: Variable length argument list passed to parent class.
+            **kwargs: Arbitrary keyword arguments passed to parent class.
+        """
         super().__init__(*args, **kwargs)
 
-    def plot_residual_effects(self, tag, possibility, filename=None, plot_ci=True, ax=None, row_col=None, log=False, clean_plot=False, y_min=1e-2, y_max=8, mate=True):
+    def plot_residual_effects(self, tag, possibility, filename=None, plot_ci=True, plot_std=False, ax=None, row_col=None, log=False, clean_plot=False, y_min=1e-2, y_max=8, mate=True):
+        """Plot residual effects for checkmate vs non-checkmate positions.
+        
+        Creates line plots showing the mean residual effects across neural network layers,
+        with separate analysis for mate-in-N puzzles vs non-mate positions.
+        
+        Args:
+            tag (str): Dataset tag identifier (e.g., 's' for standard).
+            possibility (str): Specific possibility/scenario identifier.
+            filename (str, optional): Output filename for saving the plot.
+            plot_ci (bool): Whether to plot confidence intervals (50% and 90%). Defaults to True.
+            plot_std (bool): Whether to plot standard deviation instead of confidence intervals. Defaults to False.
+            ax (matplotlib.axes.Axes, optional): Existing axes to plot on.
+            row_col (tuple, optional): (is_bottom_row, is_left_col, title) for grid plots.
+            log (bool): Whether to use logarithmic y-axis scaling. Defaults to False.
+            clean_plot (bool): Whether to use clean plotting style. Defaults to False.
+            y_min (float): Minimum y-axis value. Defaults to 1e-2.
+            y_max (float): Maximum y-axis value. Defaults to 8.
+            mate (bool): Whether to analyze mate positions (True) or non-mate (False).
+        """
         ax_init = None if ax is None else ax
 
         effects_data, nonskipped = self.get_effect_set_data(tag, possibility)
@@ -65,6 +109,7 @@ class CheckmateStudy(FifthMoveStudy):
                 continue
         
             mean_effects = np.mean(effects, axis=0)
+            std_effects = np.std(effects, axis=0)
 
             ax.plot(
                 layers,
@@ -74,7 +119,17 @@ class CheckmateStudy(FifthMoveStudy):
                 linestyle=line_styles[i],
                 linewidth= 3 * fh.LINE_WIDTH,
             )
-            if plot_ci:
+            if plot_std:
+                # Plot standard deviation
+                ax.fill_between(
+                    layers,
+                    mean_effects - std_effects,
+                    mean_effects + std_effects,
+                    color=colors[i],
+                    alpha=0.3,
+                )
+            elif plot_ci:
+                # Plot confidence intervals
                 ci_50 = np.quantile(effects, [0.25, 0.75], axis=0)
                 ci_90 = np.quantile(effects, [0.05, 0.95], axis=0)
                 if not clean_plot:
@@ -127,7 +182,23 @@ class CheckmateStudy(FifthMoveStudy):
         if ax is None:
             plt.show()
 
-    def plot_residual_effects_grid(self, tag, possibilities=None, n_cols=4, filename=None, log=False, y_min=1e-2, y_max=8, plot_ci=True):
+    def plot_residual_effects_grid(self, tag, possibilities=None, n_cols=4, filename=None, log=False, y_min=1e-2, y_max=8, plot_ci=True, plot_std=False):
+        """Create a grid of residual effect plots for multiple possibilities.
+        
+        Generates a grid layout with paired plots (mate vs non-mate) for each
+        possibility, allowing for comprehensive comparison across scenarios.
+        
+        Args:
+            tag (str or list): Dataset tag(s). If list, possibilities is ignored.
+            possibilities (list, optional): List of possibility identifiers to plot.
+            n_cols (int): Number of columns in the grid layout. Defaults to 4.
+            filename (str, optional): Output filename for saving the plot.
+            log (bool): Whether to use logarithmic y-axis scaling. Defaults to False.
+            y_min (float): Minimum y-axis value. Defaults to 1e-2.
+            y_max (float): Maximum y-axis value. Defaults to 8.
+            plot_ci (bool): Whether to plot confidence intervals (50% and 90%). Defaults to True.
+            plot_std (bool): Whether to plot standard deviation instead of confidence intervals. Defaults to False.
+        """
         if possibilities is None:
             multiple_tags = True
             cases = tag.copy()
@@ -149,6 +220,7 @@ class CheckmateStudy(FifthMoveStudy):
                     ax=ax,
                     row_col=(row == n_rows - 1, col == 0, possibility),
                     plot_ci=plot_ci,
+                    plot_std=plot_std,
                     filename=None,
                     log=log,
                     y_min=y_min,
@@ -165,6 +237,7 @@ class CheckmateStudy(FifthMoveStudy):
                     ax=ax,
                     row_col=(row == n_rows - 1, col == 0, possibility),
                     plot_ci=plot_ci,
+                    plot_std=plot_std,
                     filename=None,
                     log=log,
                     y_min=y_min,
@@ -191,6 +264,22 @@ class CheckmateStudy(FifthMoveStudy):
             fh.save('figures/' + filename, fig)
 
     def plot_attention_grid(self, tag, possibilities, n_cols=4, vmax=0.5, filename=None):
+        """Create a grid of attention heatmaps for checkmate analysis.
+        
+        Generates heatmaps showing attention patterns across neural network layers
+        and heads, with overlaid piece movement indicators (Knight, Bishop, Rook).
+        Creates paired plots for mate vs non-mate scenarios.
+        
+        Args:
+            tag (str): Dataset tag identifier. Must be 'n' for this implementation.
+            possibilities (list): List of possibility identifiers to analyze.
+            n_cols (int): Number of columns in the grid layout. Defaults to 4.
+            vmax (float): Maximum value for heatmap color scaling. Defaults to 0.5.
+            filename (str, optional): Output filename for saving the plot.
+            
+        Raises:
+            NotImplementedError: If tag is not 'n'.
+        """
         if tag != "n":
             raise NotImplementedError("Only tag 'n' is supported for checkmate plots")
 

@@ -1,3 +1,12 @@
+"""Alternative moves analysis for Leela chess engine.
+
+This module provides functionality to analyze alternative moves and create game trees
+for chess positions using the Leela Chess Zero model. It includes functions to:
+- Get top moves from a position with recursive depth analysis
+- Check for double-branching game scenarios
+- Visualize game trees using NetworkX and matplotlib
+"""
+
 from matplotlib import pyplot as plt
 import torch
 import networkx as nx
@@ -9,6 +18,24 @@ def get_top_moves(
     limit = 3,
     min_prob: float | list[float] = 0.1,
 ) -> dict[str, dict[str, float]]:
+    """Get top moves from a chess position recursively.
+    
+    Analyzes the given board position and returns the top moves with their probabilities,
+    recursively exploring move trees up to a specified depth limit.
+    
+    Args:
+        model: The Leela Chess Zero model to use for move prediction
+        board: The chess board position to analyze
+        limit: Maximum depth to explore (default: 3)
+        min_prob: Minimum probability threshold for including moves.
+                 Can be a float or list of floats for different depths
+    
+    Returns:
+        Dict mapping move strings to dictionaries containing 'prob' and nested moves
+        
+    Example:
+        {'e4': {'prob': 0.3, 'e5': {'prob': 0.4}}, 'Nf3': {'prob': 0.25}}
+    """
     
     if limit == 0:
         return {}
@@ -55,6 +82,26 @@ def get_double_branch_moves(
     end: int = 3,
     min_prob: float | list[float] = 0.1,
 ) -> dict[str, dict[str, float]] | None:
+    """Get moves for double-branching game scenarios.
+    
+    Analyzes positions where the game tree branches into exactly two viable paths
+    at each level. Returns None if the position doesn't satisfy double-branching criteria.
+    
+    Args:
+        model: The Leela Chess Zero model to use for move prediction
+        board: The chess board position to analyze
+        limit: Current depth level (default: 0)
+        end: Maximum depth to explore (default: 3)
+        min_prob: Minimum probability threshold for including moves.
+                 Can be a float or list of floats for different depths
+    
+    Returns:
+        Dict mapping move strings to nested move dictionaries, or None if criteria not met
+        
+    Note:
+        At depth 0, expects exactly 2 moves above threshold.
+        At other depths, expects exactly 1 move above threshold.
+    """
     
     if limit == end:
         return {}
@@ -101,6 +148,22 @@ def get_double_branch_moves(
     return top_dict
 
 def check_if_double_game(model: Lc0Model, puzzle):
+    """Check if a puzzle represents a double-branching game scenario.
+    
+    Analyzes a chess puzzle to determine if it follows a double-branching pattern
+    where the game tree consistently branches into exactly 2-3 viable moves at each level.
+    
+    Args:
+        model: The Leela Chess Zero model to use for move prediction
+        puzzle: Chess puzzle object containing FEN and correct moves
+    
+    Returns:
+        False if puzzle doesn't match double-game criteria, or
+        Tuple of (correct_moves, total_moveset) if it does match
+        
+    Note:
+        Uses the slower but more thorough get_top_moves function.
+    """
     #display(puzzle)
     board = LeelaBoard.from_puzzle(puzzle)
     correct_moves = puzzle.Moves.split()
@@ -126,6 +189,25 @@ def check_if_double_game(model: Lc0Model, puzzle):
     return (correct_moves, total_moveset)
 
 def check_if_double_game_fast(model: Lc0Model, puzzle, end: int = 3, min_prob: float | list[float] = 0.1):
+    """Fast check for double-branching game scenarios.
+    
+    Optimized version of check_if_double_game that uses get_double_branch_moves
+    for more efficient analysis of double-branching patterns.
+    
+    Args:
+        model: The Leela Chess Zero model to use for move prediction
+        puzzle: Chess puzzle object containing FEN and correct moves
+        end: Maximum depth to explore (default: 3)
+        min_prob: Minimum probability threshold for including moves.
+                 Can be a float or list of floats for different depths
+    
+    Returns:
+        False if puzzle doesn't match double-game criteria, or
+        Tuple of (correct_moves, total_moveset) if it does match
+        
+    Note:
+        More efficient than check_if_double_game but with stricter branching criteria.
+    """
     #display(puzzle)
     board = LeelaBoard.from_puzzle(puzzle)
     correct_moves = puzzle.Moves.split()
@@ -158,6 +240,23 @@ def check_if_double_game_fast(model: Lc0Model, puzzle, end: int = 3, min_prob: f
 
 
 def create_tree_graph(tree, parent_path=None, graph=None):
+    """Create a NetworkX directed graph from a move tree.
+    
+    Recursively converts a nested move dictionary into a NetworkX DiGraph
+    suitable for visualization.
+    
+    Args:
+        tree: Nested dictionary representing the move tree
+        parent_path: Path string of the parent node (for recursion)
+        graph: Existing NetworkX DiGraph to add to (created if None)
+    
+    Returns:
+        NetworkX DiGraph with nodes representing moves and edges representing sequences
+        
+    Note:
+        Node labels include move notation and probability values.
+        Paths are constructed by concatenating parent_path with move strings.
+    """
     if graph is None:
         graph = nx.DiGraph()
     
@@ -177,6 +276,25 @@ def create_tree_graph(tree, parent_path=None, graph=None):
     return graph
 
 def hierarchy_pos(G, root=None, width=1., vert_gap = 0.2, vert_loc = 0, xcenter = 0.5):
+    """Calculate hierarchical positions for tree graph visualization.
+    
+    Computes node positions for a tree-like layout where nodes are arranged
+    in levels with proper spacing and centering.
+    
+    Args:
+        G: NetworkX graph to position
+        root: Root node to start from (auto-detected if None)
+        width: Total width available for positioning (default: 1.0)
+        vert_gap: Vertical gap between levels (default: 0.2)
+        vert_loc: Starting vertical location (default: 0)
+        xcenter: Horizontal center point (default: 0.5)
+    
+    Returns:
+        Dictionary mapping node names to (x, y) coordinate tuples
+        
+    Note:
+        Uses recursive helper function to calculate positions level by level.
+    """
     if root is None:
         roots = [n for n,d in G.in_degree() if d==0]
         if len(roots) > 1:
@@ -205,6 +323,23 @@ def hierarchy_pos(G, root=None, width=1., vert_gap = 0.2, vert_loc = 0, xcenter 
     return _hierarchy_pos(G, root, width, vert_gap, vert_loc, xcenter)
 
 def plot_game_trees(puzzle_movesets, filename=None, width=6, height=4):
+    """Plot game trees for multiple puzzle movesets.
+    
+    Creates matplotlib visualizations of game trees, highlighting correct moves
+    in green and alternative moves in blue.
+    
+    Args:
+        puzzle_movesets: List of tuples containing (correct_moves, moveset) pairs
+        filename: Optional filename to save plots (default: None, display only)
+        width: Figure width in inches (default: 6)
+        height: Figure height in inches (default: 4)
+    
+    Note:
+        - Correct move paths are colored light green
+        - Alternative move paths are colored light blue
+        - Each puzzle generates a separate plot
+        - Plots are displayed and optionally saved to file
+    """
     for correct_moves, moveset in puzzle_movesets:
         graph = create_tree_graph(moveset)
         pos = hierarchy_pos(graph)

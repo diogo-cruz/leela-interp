@@ -1,4 +1,11 @@
 
+"""Double mate puzzle analysis module.
+
+This module provides tools for analyzing chess positions with double mate threats,
+including generating game trees, computing attention attributions, and visualizing
+chess board states with various augmentation techniques.
+"""
+
 import numpy as np
 import matplotlib.pyplot as plt
 from pathlib import Path
@@ -22,8 +29,25 @@ from leela_interp.tools.attention import attention_attribution, top_k_attributio
 from leela_interp.tools.patching import activation_patch
 
 class DoubleMateStudy:
+    """A class for studying double mate chess positions.
+    
+    This class provides comprehensive analysis of chess positions that contain
+    double mate threats, including move generation, game tree visualization,
+    attention attribution analysis, and data augmentation techniques.
+    """
     
     def __init__(self, model, fens, augment_data=True, load_all=True, save_plots=False, min_prob=0.1, limit=4):
+        """Initialize the DoubleMateStudy with chess positions and configuration.
+        
+        Args:
+            model: The chess engine model to use for analysis
+            fens (list): List of FEN strings representing chess positions
+            augment_data (bool): Whether to augment the dataset with mirrored and color-swapped positions
+            load_all (bool): Whether to load all analysis components during initialization
+            save_plots (bool): Whether to save generated plots and visualizations
+            min_prob (float): Minimum probability threshold for move selection
+            limit (int): Maximum number of moves to consider in analysis
+        """
         self.model = model
         # Bad puzzle
         #min_prob = [0.45, 0.2, 0.2, 0.05]
@@ -48,6 +72,11 @@ class DoubleMateStudy:
             self.save_attributions()
 
     def save_boards(self):
+        """Save chess board visualizations as SVG files, then convert to PDF.
+        
+        Creates board visualizations for all loaded positions and saves them
+        as timestamped files in the 'double_mate' directory.
+        """
         for i, board in enumerate(self.boards):
             board.plot(show_lastmove=False).render(filename='double_mate/' + self.filetime + '_board_' + str(i) + '.svg')
         
@@ -60,10 +89,20 @@ class DoubleMateStudy:
 
 
     def save_trees(self):
+        """Save game tree visualizations as PDF files.
+        
+        Saves all generated game trees as timestamped PDF files in the
+        'double_mate' directory.
+        """
         for i, tree in enumerate(self.game_trees):
             tree.savefig('double_mate/' + self.filetime + '_tree_' + str(i) + '.pdf', bbox_inches='tight')
 
     def save_attributions(self):
+        """Save attention attribution visualizations as SVG files, then convert to PDF.
+        
+        Creates and saves attention attribution visualizations for all board positions,
+        converting from SVG to PDF format.
+        """
         for i, board in enumerate(self.attribution_boards):
             board.render(filename='double_mate/' + self.filetime + '_attribution_' + str(i) + '.svg')
         
@@ -74,12 +113,26 @@ class DoubleMateStudy:
             os.remove(svg_file)
 
     def load_game_trees(self):
+        """Load and generate game tree visualizations for all movesets.
+        
+        Creates tree figures for each moveset and stores them in self.game_trees.
+        """
         self.game_trees = []
         for moveset in self.movesets:
             self.game_trees.append(self.tree_figure(moveset))
 
     @staticmethod
     def tree_figure(moveset, width=6, height=4):
+        """Create a tree figure visualization for a given moveset.
+        
+        Args:
+            moveset (dict): Dictionary containing move probabilities and structure
+            width (int): Figure width in inches
+            height (int): Figure height in inches
+            
+        Returns:
+            matplotlib.figure.Figure: The generated tree figure
+        """
         graph = create_tree_graph(moveset)
         pos = hierarchy_pos(graph)
         
@@ -114,6 +167,11 @@ class DoubleMateStudy:
         return fig
 
     def load_moveset(self):
+        """Load and generate movesets for all chess board positions.
+        
+        Uses the chess engine model to generate top moves for each board position,
+        applying probability thresholds and move limits.
+        """
         self.movesets = []
         for board in self.boards:
             moveset = get_top_moves(self.model, board, limit=self.limit, min_prob=self.min_prob)
@@ -121,6 +179,14 @@ class DoubleMateStudy:
             self.movesets.append(total_moveset)
     
     def load_handcrafted_puzzles(self, fens):
+        """Load chess puzzles from FEN strings with optional data augmentation.
+        
+        Args:
+            fens (list): List of FEN strings representing chess positions
+            
+        Creates LeelaBoard objects from FEN strings and applies data augmentation
+        if enabled, including mirroring and color swapping.
+        """
 
         fen_list = fens.copy()
 
@@ -140,10 +206,29 @@ class DoubleMateStudy:
         self.boards = boards
 
     def _delete_duplicates(self, fen_list):
+        """Remove duplicate FEN strings from the list.
+        
+        Args:
+            fen_list (list): List of FEN strings
+            
+        Returns:
+            list: List of unique FEN strings
+        """
         fen_list = list(set(fen_list))
         return fen_list
 
     def _augment_fen_list(self, fen_list, mirror=True, swap_colors=True, add_noise=False):
+        """Augment the FEN list with various transformations.
+        
+        Args:
+            fen_list (list): Original list of FEN strings
+            mirror (bool): Whether to add horizontally mirrored positions
+            swap_colors (bool): Whether to add color-swapped positions
+            add_noise (bool): Whether to add noise (not implemented)
+            
+        Returns:
+            list: Augmented list of FEN strings
+        """
         if add_noise:
             raise NotImplementedError("Add noise not implemented")
             fen_list = self._add_noise(fen_list)
@@ -154,17 +239,49 @@ class DoubleMateStudy:
         return fen_list
     
     def _add_noise(self, fen_list):
+        """Add noise to FEN positions (not implemented).
+        
+        Args:
+            fen_list (list): List of FEN strings
+            
+        Returns:
+            list: List with noise-augmented FEN strings
+        """
         fen_list += [self._add_noise_fen(fen) for fen in fen_list]
         return fen_list
 
     def _add_noise_fen(self, fen):
+        """Add noise to a single FEN string (not implemented).
+        
+        Args:
+            fen (str): FEN string to add noise to
+            
+        Returns:
+            str: Noise-augmented FEN string
+        """
         pass
 
     def _mirror(self, fen_list):
+        """Add horizontally mirrored versions of all FEN positions.
+        
+        Args:
+            fen_list (list): Original list of FEN strings
+            
+        Returns:
+            list: List with original and mirrored FEN strings
+        """
         fen_list += [self._mirror_fen(fen) for fen in fen_list]
         return fen_list
 
     def _mirror_fen(self, fen):
+        """Mirror a single FEN string horizontally.
+        
+        Args:
+            fen (str): Original FEN string
+            
+        Returns:
+            str: Horizontally mirrored FEN string
+        """
         # Split the FEN string into its components
         board, turn, castling, en_passant, halfmove, fullmove = fen.split()
 
@@ -188,10 +305,26 @@ class DoubleMateStudy:
         return mirrored_fen
 
     def _swap_colors(self, fen_list):
+        """Add color-swapped versions of all FEN positions.
+        
+        Args:
+            fen_list (list): Original list of FEN strings
+            
+        Returns:
+            list: List with original and color-swapped FEN strings
+        """
         fen_list += [self._swap_colors_fen(fen) for fen in fen_list]
         return fen_list
     
     def _swap_colors_fen(self, fen):
+        """Swap colors in a single FEN string (white becomes black and vice versa).
+        
+        Args:
+            fen (str): Original FEN string
+            
+        Returns:
+            str: Color-swapped FEN string
+        """
         # Split the FEN string into its components
         board, turn, castling, en_passant, halfmove, fullmove = fen.split()
 
@@ -216,6 +349,18 @@ class DoubleMateStudy:
         return new_fen
 
     def get_attributions(self, layer=12, head=12, topk=4, k=64*64, skip_colors=False):
+        """Compute attention attributions for all chess board positions.
+        
+        Args:
+            layer (int): Neural network layer to analyze
+            head (int): Attention head to analyze
+            topk (int): Number of top attributions to visualize
+            k (int): Number of top attributions to consider
+            skip_colors (bool): Whether to skip color visualization generation
+            
+        Computes attention attributions using the specified layer and head,
+        creating visualizations with colored arrows indicating attribution strength.
+        """
         self.attribution_boards = []
         self.attribution_values = []
         for board in self.boards:
@@ -233,6 +378,17 @@ class DoubleMateStudy:
             self.save_values()
 
     def get_attributions_fast(self, layer=12, head=12, topk=4, k=64*64, skip_colors=False):
+        """Compute attention attributions for all positions in a single batch (fast version).
+        
+        Args:
+            layer (int): Neural network layer to analyze
+            head (int): Attention head to analyze
+            topk (int): Number of top attributions to visualize
+            k (int): Number of top attributions to consider
+            skip_colors (bool): Whether to skip color visualization generation
+            
+        Optimized version that processes all boards in a single batch operation.
+        """
         self.attribution_boards = []
         self.attribution_values = []
         attribution = attention_attribution(
@@ -241,6 +397,11 @@ class DoubleMateStudy:
         self.attribution_values = attribution
 
     def save_values(self):
+        """Save attention attribution values as logarithmic plots.
+        
+        Creates and saves plots showing the distribution of attention attribution
+        values ranked by magnitude, using logarithmic scales for both axes.
+        """
         
         for i, values in enumerate(self.attribution_values):
             fig, ax = plt.subplots(figsize=(5, 3))
